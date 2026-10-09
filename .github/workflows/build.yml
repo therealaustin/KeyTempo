@@ -63,6 +63,10 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Tempo benchmark (63 synthetic genre tracks, hard mode)
+        if: runner.os == 'Linux'
+        run: build/kt_tempo_bench --hard --min 61
+
       - name: Download pluginval
         shell: bash
         run: |

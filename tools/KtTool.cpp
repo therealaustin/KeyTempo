@@ -1,6 +1,6 @@
 // Developer tool for KeyTempo.
 //
-//   kt_tool analyze <audio file> [more files...]
+//   kt_tool analyze [--genre NAME] <audio file> [more files...]
 //       Runs the analysis engine over whole files (WAV/AIFF/FLAC/MP3/Ogg) and prints
 //       tempo, key and time signature — handy for checking accuracy on real music.
 //
@@ -14,6 +14,8 @@
 #include <AnalysisEngine.h>
 #include <MusicTheory.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+
+#include "../tests/bench/GrooveLab.h"
 
 namespace
 {
@@ -43,51 +45,23 @@ bool loadMono (const juce::File& file, std::vector<float>& mono, double& sampleR
     return true;
 }
 
+/** A demo clip from the benchmark generator: hard-mode DnB two-step at 174 BPM. */
 std::vector<float> syntheticDemo (double sr, double seconds)
 {
-    std::vector<float> out ((size_t) (sr * seconds), 0.0f);
-    juce::Random rng (3);
-    const double bpm = 124.0, eighth = 30.0 / bpm;
-    for (int i = 0; i * eighth * sr < out.size(); ++i)
-    {
-        const auto start = (size_t) (i * eighth * sr);
-        const int step = i % 8;
-        for (size_t n = 0; n < (size_t) (0.03 * sr) && start + n < out.size(); ++n)
-            out[start + n] += 0.12f * (rng.nextFloat() * 2 - 1) * (float) std::exp (-(double) n / (0.008 * sr));
-        if (step == 0 || step == 4)
-        {
-            double ph = 0;
-            for (size_t n = 0; n < (size_t) (0.25 * sr) && start + n < out.size(); ++n)
-            {
-                const double t = n / sr;
-                ph += juce::MathConstants<double>::twoPi * (50 + 100 * std::exp (-t * 30)) / sr;
-                out[start + n] += 0.7f * (float) (std::sin (ph) * std::exp (-t * 12));
-            }
-        }
-        if (step == 2 || step == 6)
-            for (size_t n = 0; n < (size_t) (0.15 * sr) && start + n < out.size(); ++n)
-                out[start + n] += 0.35f * (rng.nextFloat() * 2 - 1) * (float) std::exp (-(n / sr) * 25);
-    }
-    // i - VI - III - VII - i - i in A minor
-    const int chords[6][4] = { { 45, 57, 60, 64 }, { 41, 57, 60, 65 }, { 48, 55, 60, 64 }, { 43, 55, 59, 62 }, { 45, 57, 60, 64 }, { 45, 57, 60, 64 } };
-    const auto chordLen = (size_t) (sr * 4 * 60.0 / bpm);
-    for (size_t start = 0, c = 0; start < out.size(); start += chordLen, ++c)
-        for (int note : chords[c % 6])
-        {
-            const double f = 440.0 * std::pow (2.0, (note - 69) / 12.0);
-            for (size_t n = 0; n < chordLen && start + n < out.size(); ++n)
-            {
-                const double t = n / sr;
-                double s = 0;
-                for (int h = 1; h <= 5; ++h)
-                    s += std::sin (juce::MathConstants<double>::twoPi * f * h * t) / h;
-                out[start + n] += 0.05f * (float) (s * std::min (1.0, t / 0.02) * std::exp (-t * 0.4));
-            }
-        }
-    return out;
+    auto clip = groove::make (groove::Style::DnbTwoStep, 174.0, 3, sr, true);
+    clip.audio.resize (std::min (clip.audio.size(), (size_t) (seconds * sr)));
+    return clip.audio;
 }
 
-int analyse (const juce::StringArray& files)
+kt::Genre parseGenre (const juce::String& name)
+{
+    for (int g = 0; g < (int) kt::Genre::numGenres; ++g)
+        if (juce::String (kt::genreName ((kt::Genre) g)).containsIgnoreCase (name))
+            return (kt::Genre) g;
+    return kt::Genre::Auto;
+}
+
+int analyse (const juce::StringArray& files, kt::Genre genre)
 {
     for (const auto& path : files)
     {
@@ -101,6 +75,7 @@ int analyse (const juce::StringArray& files)
 
         kt::AnalysisEngine engine;
         engine.prepare (sr);
+        engine.setGenre (genre);
         const auto updateEvery = (size_t) (0.4 * sr);
         size_t since = 0;
         for (size_t i = 0; i < mono.size(); i += 512)
@@ -118,11 +93,18 @@ int analyse (const juce::StringArray& files)
         const auto& t = engine.getTempo();
         const auto& k = engine.getKey();
         const auto& m = engine.getMeter();
-        std::printf ("%s\n  tempo  %s\n  key    %s\n  meter  %s\n", path.toRawUTF8(),
-                     t.valid ? juce::String::formatted ("%.2f BPM (conf %.2f)", t.bpm, t.confidence).toRawUTF8() : "-",
+        juce::String tempoText ("-");
+        if (t.valid)
+        {
+            tempoText = juce::String::formatted ("%.2f BPM  (conf %.2f, feel: %s", t.bpm, t.confidence, kt::feelName (t.feel));
+            if (t.alternateBpm > 0)
+                tempoText << juce::String::formatted (", also fits %.2f", t.alternateBpm);
+            tempoText << ")";
+        }
+        std::printf ("%s  [%s]\n  tempo  %s\n  key    %s\n  meter  %s\n", path.toRawUTF8(), kt::genreName (genre), tempoText.toRawUTF8(),
                      k.valid ? (utf8 (kt::theory::keyName (k.key)) + " / rel. " + utf8 (kt::theory::keyName (kt::theory::relativeKey (k.key)))
-                                + juce::String::formatted (" (conf %.2f, %+.0f cents)", k.confidence, k.tuningCents)).toRawUTF8() : "-",
-                     m.valid ? juce::String::formatted ("%d/%d (conf %.2f)", m.numerator, m.denominator, m.confidence).toRawUTF8() : "-");
+                                + " / " + utf8 (kt::theory::camelot (k.key))).toRawUTF8() : "-",
+                     m.valid ? juce::String::formatted ("%d/%d", m.numerator, m.denominator).toRawUTF8() : "-");
     }
     return 0;
 }
@@ -141,14 +123,14 @@ int snapshot (const juce::String& outPath, const juce::String& audioPath)
     }
     else
     {
-        mono = syntheticDemo (sr, 30.0);
+        mono = syntheticDemo (sr, 45.0);
     }
 
     KeyTempoProcessor processor;
     processor.setRateAndBufferSizeDetails (sr, 512);
     processor.prepareToPlay (sr, 512);
 
-    // Feed at roughly 20x real time so the analysis thread's FIFO never overflows.
+    // Feed at roughly 10x real time so the analysis thread's FIFO never overflows.
     juce::AudioBuffer<float> block (2, 512);
     juce::MidiBuffer midi;
     for (size_t i = 0; i + 512 <= mono.size(); i += 512)
@@ -156,8 +138,7 @@ int snapshot (const juce::String& outPath, const juce::String& audioPath)
         block.copyFrom (0, 0, mono.data() + i, 512);
         block.copyFrom (1, 0, mono.data() + i, 512);
         processor.processBlock (block, midi);
-        if ((i / 512) % 2 == 0)
-            juce::Thread::sleep (1);
+        juce::Thread::sleep (1);
     }
     juce::Thread::sleep (1500);
 
@@ -187,7 +168,18 @@ int main (int argc, char* argv[])
         args.add (juce::String::fromUTF8 (argv[i]));
 
     if (args.size() >= 2 && args[0] == "analyze")
-        return analyse (juce::StringArray (args.begin() + 1, args.size() - 1));
+    {
+        auto genre = kt::Genre::Auto;
+        juce::StringArray files;
+        for (int i = 1; i < args.size(); ++i)
+        {
+            if (args[i] == "--genre" && i + 1 < args.size())
+                genre = parseGenre (args[++i]);
+            else
+                files.add (args[i]);
+        }
+        return analyse (files, genre);
+    }
     if (args.size() >= 2 && args[0] == "demo")
     {
         // Writes the synthetic demo used by `snapshot` to a WAV file.
@@ -206,6 +198,6 @@ int main (int argc, char* argv[])
     if (args.size() >= 2 && args[0] == "snapshot")
         return snapshot (args[1], args.size() > 2 ? args[2] : juce::String());
 
-    std::printf ("usage:\n  kt_tool analyze <audio files...>\n  kt_tool snapshot <out.png> [audio file]\n");
+    std::printf ("usage:\n  kt_tool analyze [--genre auto|house|trance|drum|dubstep|hip|pop] <audio files...>\n  kt_tool demo <out.wav>\n  kt_tool snapshot <out.png> [audio file]\n");
     return 1;
 }

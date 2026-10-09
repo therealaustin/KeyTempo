@@ -157,6 +157,15 @@ GrooveFit fitGroove (const FoldedBar& bar, double bpm, Genre genre)
         }
     }
 
+    // Breakbeat vs. straight backbeat: does a good share of the kick land off the beats?
+    if (bar.hasKick)
+    {
+        double onBeats = 0.0, off = 0.0;
+        for (int st = 0; st < 16; ++st)
+            (st % 4 == 0 ? onBeats : off) += bar.kick[(size_t) st];
+        fit.syncopatedKick = off / 12.0 > 0.55 * (onBeats / 4.0) * 0.5 && off > 0.3 * (onBeats + off);
+    }
+
     // If hats exist but nothing hits the 8th offbeats, every "8th" of the real groove is
     // landing on a beat: this tempo is probably twice too fast.
     if (bar.hasHats)
@@ -183,7 +192,9 @@ GrooveFit fitGroove (const FoldedBar& bar, double bpm, Genre genre)
     else if (ht > bb)
         fit.feel = Feel::Halftime;
     else
-        fit.feel = Feel::Backbeat;
+        // "Breakbeat" here means the DnB / jungle family: a backbeat at 150+ BPM with a
+        // kick that dances around the beats.
+        fit.feel = (fit.syncopatedKick && bpm >= 150.0) ? Feel::Breakbeat : Feel::Backbeat;
     return fit;
 }
 } // namespace kt

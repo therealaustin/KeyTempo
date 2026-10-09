@@ -40,14 +40,20 @@ namespace
         g.drawText (text, r, juce::Justification::centred);
     }
 
-    constexpr int majorScale[7] = { 0, 2, 4, 5, 7, 9, 11 };
-    constexpr int minorScale[7] = { 0, 2, 3, 5, 7, 8, 10 };
+    float chipWidth (const juce::String& text, float s) { return textWidth (font (12.0f * s, true), text) + 20.0f * s; }
+
+    const juce::String listening = juce::String::fromUTF8 ("Listening\xe2\x80\xa6");
+
+    juce::String feelLabel (int feel)
+    {
+        return kt::feelName ((kt::Feel) feel);
+    }
 } // namespace
 
 // =============================================================================
-// Card
+// Panel
 // =============================================================================
-void Card::paint (juce::Graphics& g)
+void Panel::paint (juce::Graphics& g)
 {
     const float s = scale();
     const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
@@ -56,7 +62,6 @@ void Card::paint (juce::Graphics& g)
     g.setColour (colours::panel);
     g.fillRoundedRectangle (bounds, radius);
 
-    // Faint accent glow along the top edge.
     juce::ColourGradient glow (accent.withAlpha (0.10f), bounds.getCentreX(), bounds.getY(),
                                accent.withAlpha (0.0f), bounds.getCentreX(), bounds.getY() + 90.0f * s, false);
     g.setGradientFill (glow);
@@ -65,7 +70,6 @@ void Card::paint (juce::Graphics& g)
     g.setColour (colours::border);
     g.drawRoundedRectangle (bounds, radius, 1.0f);
 
-    // Title row
     const float pad = 18.0f * s;
     auto titleRow = juce::Rectangle<float> (pad, pad, bounds.getWidth() - 2 * pad, 14.0f * s);
     g.setColour (accent);
@@ -77,54 +81,52 @@ void Card::paint (juce::Graphics& g)
     if (state == nullptr)
         return;
 
-    // Confidence bar along the bottom.
-    const float conf = valid() ? juce::jlimit (0.0f, 1.0f, confidence()) : 0.0f;
-    auto bar = juce::Rectangle<float> (pad, bounds.getBottom() - pad - 4.0f * s, bounds.getWidth() - 2 * pad, 4.0f * s);
-    auto label = bar.translated (0, -16.0f * s).withHeight (12.0f * s);
-    g.setFont (font (11.0f * s));
-    g.setColour (colours::textMuted);
-    g.drawText ("Confidence", label, juce::Justification::centredLeft);
-    g.drawText (valid() ? juce::String (juce::roundToInt (conf * 100.0f)) + "%" : juce::String ("-"), label, juce::Justification::centredRight);
-
-    g.setColour (colours::border);
-    g.fillRoundedRectangle (bar, bar.getHeight() * 0.5f);
-    if (conf > 0.0f)
+    if (const auto b = badge(); b.isNotEmpty())
     {
-        g.setColour (accent.withAlpha (0.35f + 0.65f * conf));
-        g.fillRoundedRectangle (bar.withWidth (juce::jmax (bar.getHeight(), bar.getWidth() * conf)), bar.getHeight() * 0.5f);
+        const float w = chipWidth (b, s);
+        drawChip (g, juce::Rectangle<float> (titleRow.getRight() - w, titleRow.getCentreY() - 11.0f * s, w, 22.0f * s), b, accent, s);
+    }
+
+    if (showsConfidence())
+    {
+        const float conf = valid() ? juce::jlimit (0.0f, 1.0f, confidence()) : 0.0f;
+        auto bar = juce::Rectangle<float> (pad, bounds.getBottom() - pad - 4.0f * s, bounds.getWidth() - 2 * pad, 4.0f * s);
+        auto label = bar.translated (0, -16.0f * s).withHeight (12.0f * s);
+        g.setFont (font (11.0f * s));
+        g.setColour (colours::textMuted);
+        g.drawText ("Confidence", label, juce::Justification::centredLeft);
+        g.drawText (valid() ? juce::String (juce::roundToInt (conf * 100.0f)) + "%" : juce::String ("-"), label, juce::Justification::centredRight);
+
+        g.setColour (colours::border);
+        g.fillRoundedRectangle (bar, bar.getHeight() * 0.5f);
+        if (conf > 0.0f)
+        {
+            g.setColour (accent.withAlpha (0.35f + 0.65f * conf));
+            g.fillRoundedRectangle (bar.withWidth (juce::jmax (bar.getHeight(), bar.getWidth() * conf)), bar.getHeight() * 0.5f);
+        }
     }
 
     paintContent (g, contentArea());
 }
 
-juce::Rectangle<float> Card::contentArea() const
+juce::Rectangle<float> Panel::contentArea() const
 {
     const float s = scale();
     const float pad = 18.0f * s;
-    return { pad, pad + 26.0f * s, getWidth() - 2 * pad, getHeight() - 2 * pad - 26.0f * s - 30.0f * s };
-}
-
-void Card::paintPlaceholder (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& hint)
-{
-    const float s = scale();
-    g.setColour (colours::textMuted);
-    g.setFont (font (56.0f * s, true));
-    g.drawText (juce::String::fromUTF8 ("\xe2\x80\x94"), area.removeFromTop (78.0f * s), juce::Justification::centredLeft);
-    g.setFont (font (13.0f * s));
-    g.drawText (hint, area.removeFromTop (20.0f * s), juce::Justification::centredLeft);
+    const float bottom = showsConfidence() ? 30.0f * s : 0.0f;
+    return { pad, pad + 26.0f * s, getWidth() - 2 * pad, getHeight() - 2 * pad - 26.0f * s - bottom };
 }
 
 // =============================================================================
 // Tempo
 // =============================================================================
-TempoCard::TempoCard (juce::AudioProcessorValueTreeState& parameters) : Card ("TEMPO", colours::tempo), apvts (parameters)
+TempoPanel::TempoPanel (juce::AudioProcessorValueTreeState& parameters) : Panel ("TEMPO", colours::tempo), apvts (parameters)
 {
     const juce::String names[] = { juce::String::fromUTF8 ("\xc2\xbd\xc3\x97"), juce::String::fromUTF8 ("1\xc3\x97"), juce::String::fromUTF8 ("2\xc3\x97") };
     for (int i = 0; i < 3; ++i)
     {
         auto& b = scaleButtons[(size_t) i];
         b.setButtonText (names[i]);
-        b.setClickingTogglesState (false);
         b.setColour (juce::TextButton::buttonOnColourId, colours::tempo);
         b.setTooltip ("Show the detected tempo halved, as-is, or doubled");
         b.onClick = [this, i]
@@ -142,161 +144,268 @@ TempoCard::TempoCard (juce::AudioProcessorValueTreeState& parameters) : Card ("T
     syncButtons();
 }
 
-TempoCard::~TempoCard() = default;
-
-void TempoCard::syncButtons()
+void TempoPanel::syncButtons()
 {
     const int index = juce::roundToInt (apvts.getRawParameterValue ("tempoScale")->load());
     for (int i = 0; i < 3; ++i)
         scaleButtons[(size_t) i].setToggleState (i == index, juce::dontSendNotification);
 }
 
-void TempoCard::resized()
+juce::String TempoPanel::badge() const
 {
-    const float s = scale();
-    auto area = contentArea();
-    auto row = juce::Rectangle<float> (area.getX(), area.getY() + 112.0f * s, 150.0f * s, 26.0f * s).toNearestInt();
-    const int w = row.getWidth() / 3;
-    for (auto& b : scaleButtons)
-        b.setBounds (row.removeFromLeft (w).reduced (juce::roundToInt (2 * s), 0));
+    return state != nullptr && state->tempoValid && state->feel != 0 ? feelLabel (state->feel) : juce::String();
 }
 
-void TempoCard::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
+void TempoPanel::resized()
 {
     const float s = scale();
+    const auto area = contentArea();
+    auto row = juce::Rectangle<float> (area.getX(), area.getY() + 128.0f * s, 156.0f * s, 28.0f * s);
+    buttonRow = row;
+    auto r = row.toNearestInt();
+    const int w = r.getWidth() / 3;
+    for (auto& b : scaleButtons)
+        b.setBounds (r.removeFromLeft (w).reduced (juce::roundToInt (2 * s), 0));
+}
+
+void TempoPanel::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const float s = scale();
+    auto top = area.removeFromTop (124.0f * s);
+
     if (! state->tempoValid)
     {
-        paintPlaceholder (g, area, state->hold ? "Hold" : juce::String::fromUTF8 ("Listening\xe2\x80\xa6"));
-        return;
+        g.setColour (colours::textMuted);
+        g.setFont (font (96.0f * s, true));
+        g.drawText (juce::String::fromUTF8 ("\xe2\x80\x94"), top, juce::Justification::centredLeft);
+        g.setFont (font (14.0f * s));
+        g.drawText (state->hold ? juce::String ("Hold") : listening, top.withTrimmedLeft (90.0f * s), juce::Justification::centredLeft);
+    }
+    else
+    {
+        const double bpm = state->bpm * state->tempoScale;
+        const auto text = juce::String (bpm, 1);
+        const auto whole = text.upToFirstOccurrenceOf (".", false, false);
+        const auto decimals = text.fromFirstOccurrenceOf (".", true, false);
+
+        const auto big = font (112.0f * s, true);
+        const auto small = font (40.0f * s, true);
+        const float wWhole = textWidth (big, whole);
+        const float wDec = textWidth (small, decimals);
+
+        g.setColour (colours::text);
+        g.setFont (big);
+        g.drawText (whole, top.withWidth (wWhole + 4), juce::Justification::centredLeft);
+
+        // Decimals and the unit share the big digits' baseline.
+        const float baseline = top.getCentreY() + big.getAscent() * 0.5f - big.getDescent() * 0.35f;
+        g.setColour (colours::textDim);
+        g.setFont (small);
+        g.drawSingleLineText (decimals, juce::roundToInt (top.getX() + wWhole + 2.0f * s), juce::roundToInt (baseline));
+        g.setFont (font (17.0f * s, true));
+        g.drawSingleLineText ("BPM", juce::roundToInt (top.getX() + wWhole + wDec + 12.0f * s), juce::roundToInt (baseline));
     }
 
-    const double bpm = state->bpm * state->tempoScale;
-    const auto value = juce::String (bpm, 1);
-    auto big = font (64.0f * s, true);
-    auto valueRow = area.removeFromTop (78.0f * s);
-    g.setColour (colours::text);
-    g.setFont (big);
-    g.drawText (value, valueRow, juce::Justification::centredLeft);
-
-    const float w = textWidth (big, value);
-    g.setColour (colours::textDim);
-    g.setFont (font (15.0f * s, true));
-    g.drawText ("BPM", valueRow.withTrimmedLeft (w + 8.0f * s).withTrimmedTop (30.0f * s), juce::Justification::centredLeft);
-
-    // Small secondary line: rounded value and the host's tempo, if any.
-    g.setFont (font (12.5f * s));
-    g.setColour (colours::textDim);
-    juce::String line = juce::String::fromUTF8 ("\xe2\x89\x88 ") + juce::String (juce::roundToInt (bpm)) + " BPM";
+    // Secondary line beside the multiplier buttons: alternate reading and host tempo.
+    auto info = juce::Rectangle<float> (buttonRow.getRight() + 16.0f * s, buttonRow.getY(), area.getRight() - buttonRow.getRight() - 16.0f * s, buttonRow.getHeight());
+    juce::StringArray parts;
+    // Only octave alternates are worth showing: those are what the multiplier buttons fix.
+    if (state->tempoValid && state->alternateBpm > 0.0f && state->bpm > 0.0f)
+    {
+        const float ratio = state->alternateBpm / state->bpm;
+        if (std::abs (ratio - 0.5f) < 0.02f || std::abs (ratio - 2.0f) < 0.08f)
+            parts.add ("Also fits " + juce::String (state->alternateBpm * state->tempoScale, 1)
+                       + (ratio < 1.0f ? juce::String::fromUTF8 (" (\xc2\xbd\xc3\x97)") : juce::String::fromUTF8 (" (2\xc3\x97)")));
+    }
     if (state->hostBpm > 0.0f)
-        line << juce::String::fromUTF8 ("   \xc2\xb7   Host ") << juce::String (state->hostBpm, 1);
-    g.drawText (line, area.removeFromTop (22.0f * s), juce::Justification::centredLeft);
+        parts.add ("Host " + juce::String (state->hostBpm, 1));
+    g.setColour (colours::textDim);
+    g.setFont (font (12.5f * s));
+    g.drawText (parts.joinIntoString (juce::String::fromUTF8 ("   \xc2\xb7   ")), info, juce::Justification::centredRight);
+
+    area.removeFromTop (44.0f * s);
+    paintHistory (g, area.reduced (0, 4.0f * s));
+}
+
+void TempoPanel::paintHistory (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const float s = scale();
+    auto label = area.removeFromTop (14.0f * s);
+    g.setColour (colours::textMuted);
+    g.setFont (font (11.0f * s));
+    g.drawText ("Readings, last 60 s", label, juce::Justification::centredLeft);
+    area.removeFromTop (4.0f * s);
+
+    g.setColour (colours::panelRaised);
+    g.fillRoundedRectangle (area, 8.0f * s);
+
+    const float centre = state->tempoValid ? state->bpm : 0.0f;
+    if (centre <= 0.0f)
+        return;
+
+    // Log-scaled y axis from half to double the shown tempo: octave errors show up as
+    // dots on the dashed guide lines, 3:2 confusions between them.
+    const auto plot = area.reduced (10.0f * s, 8.0f * s);
+    auto yFor = [&] (float bpm)
+    {
+        const float octaves = std::log2 (bpm / centre); // -1..1
+        return plot.getCentreY() - octaves * plot.getHeight() * 0.5f;
+    };
+
+    for (float mult : { 0.5f, 2.0f })
+    {
+        const float y = yFor (centre * mult);
+        g.setColour (colours::border);
+        const float dashes[] = { 3.0f * s, 4.0f * s };
+        g.drawDashedLine ({ plot.getX(), y, plot.getRight() - 34.0f * s, y }, dashes, 2, 1.0f);
+        g.setColour (colours::textMuted);
+        g.setFont (font (10.0f * s));
+        g.drawText (mult < 1.0f ? juce::String::fromUTF8 ("\xc2\xbd\xc3\x97") : juce::String::fromUTF8 ("2\xc3\x97"),
+                    juce::Rectangle<float> (plot.getRight() - 30.0f * s, y - 7.0f * s, 30.0f * s, 14.0f * s), juce::Justification::centredRight);
+    }
+
+    const int n = Readout::historyLength;
+    const float dx = (plot.getWidth() - 34.0f * s) / (float) (n - 1);
+
+    // Shown tempo as a line
+    juce::Path line;
+    bool started = false;
+    for (int i = 0; i < n; ++i)
+    {
+        const float v = state->historyShown[(size_t) i];
+        if (v <= 0.0f)
+        {
+            started = false;
+            continue;
+        }
+        const float x = plot.getX() + i * dx, y = juce::jlimit (plot.getY(), plot.getBottom(), yFor (v));
+        if (! started) line.startNewSubPath (x, y); else line.lineTo (x, y);
+        started = true;
+    }
+    g.setColour (colours::tempo.withAlpha (0.8f));
+    g.strokePath (line, juce::PathStrokeType (2.0f * s, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Each window's reading as a dot
+    for (int i = 0; i < n; ++i)
+    {
+        const float v = state->history[(size_t) i];
+        if (v <= 0.0f || v < centre * 0.45f || v > centre * 2.2f)
+            continue;
+        const bool agrees = std::abs (v - centre) / centre < 0.015f;
+        const float d = (agrees ? 3.0f : 4.0f) * s;
+        g.setColour (agrees ? colours::text.withAlpha (0.45f) : colours::meter.withAlpha (0.85f));
+        g.fillEllipse (plot.getX() + i * dx - d * 0.5f, yFor (v) - d * 0.5f, d, d);
+    }
+}
+
+// =============================================================================
+// Genre
+// =============================================================================
+GenrePanel::GenrePanel (juce::AudioProcessorValueTreeState& apvts) : Panel ("GENRE", colours::textDim)
+{
+    box.addItemList (KeyTempoProcessor::genreNames(), 1);
+    box.setTooltip ("Auto suits most music. Choosing a genre locks its tempo conventions "
+                    "(e.g. Drum & Bass always reads 160-190, never 87).");
+    attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "genre", box);
+    addAndMakeVisible (box);
+}
+
+void GenrePanel::resized()
+{
+    const float s = scale();
+    const auto area = contentArea();
+    box.setBounds (area.withHeight (30.0f * s).toNearestInt());
+}
+
+void GenrePanel::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const float s = scale();
+    area.removeFromTop (36.0f * s);
+    g.setColour (colours::textMuted);
+    g.setFont (font (11.0f * s));
+    const auto range = kt::tempoRangeFor ((kt::Genre) state->genre);
+    const auto text = state->genre == 0 ? juce::String ("Detects the genre's feel automatically")
+                                        : "Locked to " + juce::String ((int) range.lo) + "-" + juce::String ((int) range.hi) + " BPM";
+    g.drawText (text, area.removeFromTop (16.0f * s), juce::Justification::centredLeft);
 }
 
 // =============================================================================
 // Key
 // =============================================================================
-void KeyCard::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
+void KeyPanel::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
 {
     const float s = scale();
     if (! state->keyValid || state->key < 0)
     {
-        paintPlaceholder (g, area, state->hold ? "Hold" : juce::String::fromUTF8 ("Listening\xe2\x80\xa6"));
+        g.setColour (colours::textMuted);
+        g.setFont (font (13.0f * s));
+        g.drawText (state->hold ? juce::String ("Hold") : listening, area.removeFromTop (34.0f * s), juce::Justification::centredLeft);
         return;
     }
 
     const int key = state->key;
     const auto name = utf8 (kt::theory::keyName (key));
+    auto row = area.removeFromTop (30.0f * s);
     g.setColour (colours::text);
-    g.setFont (fitted (name, 44.0f * s, area.getWidth(), true));
-    g.drawText (name, area.removeFromTop (78.0f * s), juce::Justification::centredLeft);
+    g.setFont (fitted (name, 26.0f * s, row.getWidth(), true));
+    g.drawText (name, row, juce::Justification::centredLeft);
 
-    // Relative key
+    area.removeFromTop (2.0f * s);
     const int rel = kt::theory::relativeKey (key);
-    auto relRow = area.removeFromTop (22.0f * s);
-    g.setFont (font (13.0f * s));
+    auto relRow = area.removeFromTop (17.0f * s);
+    g.setFont (font (12.5f * s));
     g.setColour (colours::textDim);
-    g.drawText ("Relative", relRow, juce::Justification::centredLeft);
-    g.setColour (colours::text);
-    g.setFont (font (13.0f * s, true));
-    g.drawText (utf8 (kt::theory::keyName (rel)), relRow.withTrimmedLeft (62.0f * s), juce::Justification::centredLeft);
+    g.drawText ("Relative " + utf8 (kt::theory::keyName (rel)) + juce::String::fromUTF8 (" \xc2\xb7 ") + utf8 (kt::theory::camelot (rel)),
+                relRow, juce::Justification::centredLeft);
 
-    area.removeFromTop (8.0f * s);
-
-    // Chips: short name, Camelot code, tuning
-    auto chips = area.removeFromTop (24.0f * s);
-    const auto shortName = utf8 (kt::theory::shortKeyName (key));
-    const auto cam = utf8 (kt::theory::camelot (key));
-    const float a4 = 440.0f * std::pow (2.0f, state->tuningCents / 1200.0f);
-    const auto tuning = "A4 " + juce::String (a4, 1);
-
-    auto chip = [&] (const juce::String& text, juce::Colour c)
+    if (state->keyConfidence < 0.35f)
     {
-        const float w = textWidth (font (12.0f * s, true), text) + 18.0f * s;
-        drawChip (g, chips.removeFromLeft (w), text, c, s);
-        chips.removeFromLeft (6.0f * s);
-    };
-    chip (shortName, colours::key);
-    chip (cam, colours::key);
-    if (std::abs (state->tuningCents) >= 5.0f)
-        chip (tuning, colours::textDim);
+        g.setColour (colours::textMuted);
+        g.setFont (font (11.5f * s));
+        g.drawText (juce::String::fromUTF8 ("Uncertain \xe2\x80\x94 still listening"), area.removeFromTop (16.0f * s), juce::Justification::centredLeft);
+    }
+}
+
+juce::String KeyPanel::badge() const
+{
+    return state != nullptr && state->keyValid && state->key >= 0 ? utf8 (kt::theory::camelot (state->key)) : juce::String();
 }
 
 // =============================================================================
 // Time signature
 // =============================================================================
-void MeterCard::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
+void MeterPanel::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
 {
     const float s = scale();
     if (! state->meterValid)
     {
-        paintPlaceholder (g, area, state->hold ? "Hold" : juce::String::fromUTF8 ("Listening\xe2\x80\xa6"));
+        g.setColour (colours::textMuted);
+        g.setFont (font (13.0f * s));
+        g.drawText (state->hold ? juce::String ("Hold") : listening, area.removeFromTop (34.0f * s), juce::Justification::centredLeft);
         return;
     }
 
-    // Stacked numerals, as on a score.
-    auto numerals = area.removeFromLeft (64.0f * s).removeFromTop (110.0f * s);
+    auto row = area.removeFromTop (30.0f * s);
+    const auto sig = juce::String (state->numerator) + "/" + juce::String (state->denominator);
+    const auto big = font (28.0f * s, true);
     g.setColour (colours::text);
-    g.setFont (font (50.0f * s, true));
-    g.drawText (juce::String (state->numerator), numerals.removeFromTop (55.0f * s), juce::Justification::centred);
-    g.drawText (juce::String (state->denominator), numerals, juce::Justification::centred);
-
-    area.removeFromLeft (12.0f * s);
-
-    // Description
-    g.setColour (colours::text);
-    g.setFont (font (14.0f * s, true));
-    g.drawText (utf8 (kt::theory::meterDescription (state->beatsPerBar, state->compound)),
-                area.removeFromTop (22.0f * s), juce::Justification::centredLeft);
+    g.setFont (big);
+    g.drawText (sig, row, juce::Justification::centredLeft);
     g.setColour (colours::textDim);
-    g.setFont (font (12.0f * s));
-    const auto beats = juce::String (state->beatsPerBar) + (state->beatsPerBar == 1 ? " beat" : " beats") + " per bar";
-    g.drawText (beats, area.removeFromTop (18.0f * s), juce::Justification::centredLeft);
-    g.drawText (state->compound ? "Beats split in three" : "Beats split in two", area.removeFromTop (18.0f * s),
-                juce::Justification::centredLeft);
+    g.setFont (font (12.5f * s));
+    g.drawText (utf8 (kt::theory::meterDescription (state->beatsPerBar, state->compound)),
+                row.withTrimmedLeft (textWidth (big, sig) + 12.0f * s), juce::Justification::centredLeft);
 
-    area.removeFromTop (10.0f * s);
-
-    // Beat grid: one group per beat, with its subdivisions; the downbeat is lit.
-    auto grid = area.removeFromTop (16.0f * s);
-    const int subdivisions = state->compound ? 3 : 2;
-    const float big = 9.0f * s, small = 5.0f * s, gap = 5.0f * s, groupGap = 10.0f * s;
-    float x = grid.getX();
-    for (int b = 0; b < state->beatsPerBar; ++b)
+    if (state->meterConfidence < 0.35f)
     {
-        for (int sub = 0; sub < subdivisions; ++sub)
-        {
-            const float d = sub == 0 ? big : small;
-            const auto c = (b == 0 && sub == 0) ? colours::meter : (sub == 0 ? colours::text.withAlpha (0.7f) : colours::textMuted);
-            g.setColour (c);
-            g.fillEllipse (x, grid.getCentreY() - d * 0.5f, d, d);
-            x += d + gap;
-        }
-        x += groupGap - gap;
+        g.setColour (colours::textMuted);
+        g.setFont (font (11.5f * s));
+        g.drawText (juce::String::fromUTF8 ("Uncertain \xe2\x80\x94 still listening"), area.removeFromTop (16.0f * s), juce::Justification::centredLeft);
     }
 
     if (state->hostNumerator > 0)
     {
-        area.removeFromTop (8.0f * s);
+        area.removeFromTop (4.0f * s);
         g.setColour (colours::textMuted);
         g.setFont (font (12.0f * s));
         g.drawText ("Host " + juce::String (state->hostNumerator) + "/" + juce::String (state->hostDenominator),
@@ -305,76 +414,18 @@ void MeterCard::paintContent (juce::Graphics& g, juce::Rectangle<float> area)
 }
 
 // =============================================================================
-// Chroma
-// =============================================================================
-void ChromaView::paint (juce::Graphics& g)
-{
-    if (state == nullptr)
-        return;
-
-    const auto bounds = getLocalBounds().toFloat();
-    const float s = getHeight() / 100.0f;
-    auto area = bounds.reduced (16.0f * s, 12.0f * s);
-
-    g.setColour (colours::panel);
-    g.fillRoundedRectangle (bounds.reduced (0.5f), 14.0f * s);
-    g.setColour (colours::border);
-    g.drawRoundedRectangle (bounds.reduced (0.5f), 14.0f * s, 1.0f);
-
-    auto header = area.removeFromTop (14.0f * s);
-    g.setColour (colours::textDim);
-    g.setFont (tracked (11.0f * s, true, 0.14f));
-    g.drawText ("PITCH CLASSES", header, juce::Justification::centredLeft);
-
-    // Which pitch classes belong to the detected key's scale?
-    std::array<bool, 12> inScale {};
-    int tonic = -1;
-    if (state->keyValid && state->key >= 0)
-    {
-        tonic = kt::theory::tonic (state->key);
-        const int* scale = kt::theory::isMinor (state->key) ? minorScale : majorScale;
-        for (int i = 0; i < 7; ++i)
-            inScale[(size_t) ((tonic + scale[i]) % 12)] = true;
-    }
-
-    area.removeFromTop (6.0f * s);
-    auto labels = area.removeFromBottom (14.0f * s);
-    const float colW = area.getWidth() / 12.0f;
-    for (int pc = 0; pc < 12; ++pc)
-    {
-        auto col = juce::Rectangle<float> (area.getX() + pc * colW, area.getY(), colW, area.getHeight()).reduced (colW * 0.18f, 0);
-        const float v = juce::jlimit (0.0f, 1.0f, state->chroma[(size_t) pc]);
-
-        g.setColour (colours::border.withAlpha (0.6f));
-        g.fillRoundedRectangle (col, 3.0f * s);
-
-        const auto c = pc == tonic ? colours::key : (inScale[(size_t) pc] ? colours::key.withAlpha (0.55f) : colours::textMuted);
-        g.setColour (c);
-        g.fillRoundedRectangle (col.withTrimmedTop (col.getHeight() * (1.0f - v)), 3.0f * s);
-
-        g.setColour (pc == tonic ? colours::text : colours::textDim);
-        g.setFont (font (10.5f * s, pc == tonic));
-        g.drawText (utf8 (kt::theory::pitchClassName (pc)),
-                    juce::Rectangle<float> (area.getX() + pc * colW, labels.getY(), colW, labels.getHeight()),
-                    juce::Justification::centred);
-    }
-}
-
-// =============================================================================
 // Editor
 // =============================================================================
 KeyTempoEditor::KeyTempoEditor (KeyTempoProcessor& p)
-    : AudioProcessorEditor (p), processor (p), tempoCard (p.getState())
+    : AudioProcessorEditor (p), processor (p), tempoPanel (p.getState()), genrePanel (p.getState())
 {
     setLookAndFeel (&lnf);
 
-    for (auto* card : std::initializer_list<Card*> { &tempoCard, &keyCard, &meterCard })
+    for (auto* panel : std::initializer_list<Panel*> { &tempoPanel, &genrePanel, &keyPanel, &meterPanel })
     {
-        card->setState (display);
-        addAndMakeVisible (card);
+        panel->setState (display);
+        addAndMakeVisible (panel);
     }
-    chroma.setState (display);
-    addAndMakeVisible (chroma);
 
     holdButton.setClickingTogglesState (true);
     holdButton.setColour (juce::TextButton::buttonOnColourId, colours::meter);
@@ -382,21 +433,9 @@ KeyTempoEditor::KeyTempoEditor (KeyTempoProcessor& p)
     holdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.getState(), "hold", holdButton);
     addAndMakeVisible (holdButton);
 
-    resetButton.setTooltip ("Forget everything heard so far and start again");
+    resetButton.setTooltip ("Forget everything heard so far and start again (e.g. for the next track)");
     resetButton.onClick = [this] { processor.requestReset(); };
     addAndMakeVisible (resetButton);
-
-    rangeBox.addItemList (KeyTempoProcessor::tempoRangeNames(), 1);
-    memoryBox.addItemList (KeyTempoProcessor::keyMemoryNames(), 1);
-    rangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.getState(), "tempoRange", rangeBox);
-    memoryAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.getState(), "keyMemory", memoryBox);
-    for (auto* box : { &rangeBox, &memoryBox })
-        addAndMakeVisible (box);
-    for (auto* label : { &rangeLabel, &memoryLabel })
-    {
-        label->setColour (juce::Label::textColourId, colours::textDim);
-        addAndMakeVisible (label);
-    }
 
     setResizable (true, true);
     if (auto* c = getConstrainer())
@@ -422,9 +461,9 @@ juce::String KeyTempoEditor::statusText() const
         return "Hold";
     if (display.level < 1.0e-4f)
         return "No input";
-    if (display.tempoValid || display.keyValid)
+    if (display.tempoValid)
         return "Analyzing";
-    return juce::String::fromUTF8 ("Listening\xe2\x80\xa6");
+    return listening;
 }
 
 void KeyTempoEditor::paint (juce::Graphics& g)
@@ -432,7 +471,6 @@ void KeyTempoEditor::paint (juce::Graphics& g)
     const float s = getWidth() / (float) baseWidth;
     g.fillAll (colours::background);
 
-    // Title
     auto header = headerArea;
     g.setColour (colours::text);
     g.setFont (font (20.0f * s, true));
@@ -440,7 +478,6 @@ void KeyTempoEditor::paint (juce::Graphics& g)
     g.drawText (name, header, juce::Justification::centredLeft);
     const float nameW = textWidth (font (20.0f * s, true), name);
 
-    // Status pill
     const auto status = statusText();
     const bool active = status == "Analyzing";
     const auto statusColour = display.hold ? colours::meter : (active ? colours::good : colours::textDim);
@@ -453,7 +490,6 @@ void KeyTempoEditor::paint (juce::Graphics& g)
     g.setFont (font (12.0f * s, true));
     g.drawText (status, pill.withTrimmedLeft (22.0f * s), juce::Justification::centredLeft);
 
-    // Input meter
     const float db = juce::Decibels::gainToDecibels (display.level, -60.0f);
     const float norm = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
     g.setColour (colours::textMuted);
@@ -472,11 +508,12 @@ void KeyTempoEditor::resized()
 {
     const float s = getWidth() / (float) baseWidth;
     lnf.uiScale = s;
-    const int margin = juce::roundToInt (20 * s), gap = juce::roundToInt (14 * s);
+    for (auto* panel : std::initializer_list<Panel*> { &tempoPanel, &genrePanel, &keyPanel, &meterPanel })
+        panel->uiScale = s;
 
+    const int margin = juce::roundToInt (20 * s), gap = juce::roundToInt (14 * s);
     auto area = getLocalBounds().reduced (margin);
 
-    // Header
     auto header = area.removeFromTop (juce::roundToInt (34 * s));
     resetButton.setBounds (header.removeFromRight (juce::roundToInt (70 * s)).reduced (0, juce::roundToInt (3 * s)));
     header.removeFromRight (juce::roundToInt (8 * s));
@@ -487,34 +524,16 @@ void KeyTempoEditor::resized()
 
     area.removeFromTop (juce::roundToInt (14 * s));
 
-    // Footer: chroma on the left, settings on the right
-    auto footer = area.removeFromBottom (juce::roundToInt (108 * s));
-    area.removeFromBottom (gap);
+    auto right = area.removeFromRight (juce::roundToInt (250 * s));
+    area.removeFromRight (gap);
+    tempoPanel.setBounds (area);
 
-    auto settings = footer.removeFromRight (juce::roundToInt (220 * s));
-    footer.removeFromRight (gap);
-    chroma.setBounds (footer);
-
-    const int rowH = juce::roundToInt (16 * s), boxH = juce::roundToInt (30 * s);
-    auto placeSetting = [&] (juce::Label& label, juce::ComboBox& box)
-    {
-        label.setBounds (settings.removeFromTop (rowH));
-        label.setFont (tracked (11.0f * s, true, 0.14f));
-        label.setBorderSize ({ 0, 2, 0, 0 });
-        box.setBounds (settings.removeFromTop (boxH));
-        settings.removeFromTop (juce::roundToInt (14 * s));
-    };
-    settings.removeFromTop (juce::roundToInt (2 * s));
-    placeSetting (rangeLabel, rangeBox);
-    placeSetting (memoryLabel, memoryBox);
-
-    // Cards
-    const int cardW = (area.getWidth() - 2 * gap) / 3;
-    tempoCard.setBounds (area.removeFromLeft (cardW));
-    area.removeFromLeft (gap);
-    keyCard.setBounds (area.removeFromLeft (cardW));
-    area.removeFromLeft (gap);
-    meterCard.setBounds (area);
+    genrePanel.setBounds (right.removeFromTop (juce::roundToInt (100 * s)));
+    right.removeFromTop (gap);
+    const int rest = right.getHeight() - gap;
+    keyPanel.setBounds (right.removeFromTop (rest / 2));
+    right.removeFromTop (gap);
+    meterPanel.setBounds (right);
 }
 
 void KeyTempoEditor::timerCallback()
@@ -522,21 +541,29 @@ void KeyTempoEditor::timerCallback()
     const auto& r = processor.getReadout();
     auto& apvts = processor.getState();
 
-    // Smooth confidences so the bars glide rather than jump.
     auto glide = [] (float current, float target) { return current + (target - current) * 0.2f; };
 
     display.tempoValid = r.tempoValid;
     display.bpm = r.bpm;
+    display.alternateBpm = r.alternateBpm;
+    display.feel = r.feel;
     display.tempoConfidence = glide (display.tempoConfidence, r.tempoValid ? r.tempoConfidence.load() : 0.0f);
     const int scaleIndex = juce::roundToInt (apvts.getRawParameterValue ("tempoScale")->load());
     display.tempoScale = scaleIndex == 0 ? 0.5f : (scaleIndex == 2 ? 2.0f : 1.0f);
+    display.genre = juce::roundToInt (apvts.getRawParameterValue ("genre")->load());
+
+    const int write = r.historyWrite.load();
+    for (int i = 0; i < Readout::historyLength; ++i)
+    {
+        const auto src = (size_t) ((write + i) % Readout::historyLength);
+        display.history[(size_t) i] = r.history[src].load();
+        display.historyShown[(size_t) i] = r.historyShown[src].load();
+    }
 
     display.keyValid = r.keyValid;
     display.key = r.key;
     display.tuningCents = r.tuningCents;
     display.keyConfidence = glide (display.keyConfidence, r.keyValid ? r.keyConfidence.load() : 0.0f);
-    for (size_t i = 0; i < 12; ++i)
-        display.chroma[i] = glide (display.chroma[i], r.chroma[i].load());
 
     display.meterValid = r.meterValid;
     display.numerator = r.numerator;
@@ -551,6 +578,6 @@ void KeyTempoEditor::timerCallback()
     display.hostDenominator = r.hostDenominator;
     display.hold = apvts.getRawParameterValue ("hold")->load() > 0.5f;
 
-    tempoCard.syncButtons();
+    tempoPanel.syncButtons();
     repaint();
 }

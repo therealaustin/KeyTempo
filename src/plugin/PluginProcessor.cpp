@@ -3,19 +3,23 @@
 
 namespace
 {
-    constexpr const char* rangeId = "tempoRange";
+    constexpr const char* genreId = "genre";
     constexpr const char* memoryId = "keyMemory";
     constexpr const char* holdId = "hold";
     constexpr const char* scaleId = "tempoScale";
 
-    struct Range { double lo, hi; };
-    constexpr Range tempoRanges[] = { { 70.0, 180.0 }, { 50.0, 100.0 }, { 80.0, 160.0 }, { 100.0, 200.0 } };
     constexpr double keyMemorySeconds[] = { 15.0, 45.0, 120.0, 0.0 };
 
     constexpr double analysisIntervalSeconds = 0.4;
 } // namespace
 
-juce::StringArray KeyTempoProcessor::tempoRangeNames()  { return { "70-180 BPM", "50-100 BPM", "80-160 BPM", "100-200 BPM" }; }
+juce::StringArray KeyTempoProcessor::genreNames()
+{
+    juce::StringArray names;
+    for (int g = 0; g < (int) kt::Genre::numGenres; ++g)
+        names.add (kt::genreName ((kt::Genre) g));
+    return names;
+}
 juce::StringArray KeyTempoProcessor::keyMemoryNames()   { return { "15 s", "45 s", "2 min", "Whole track" }; }
 // Parameter value names stay ASCII: some hosts and wrappers don't round-trip other text.
 juce::StringArray KeyTempoProcessor::tempoScaleNames()  { return { "Half", "Normal", "Double" }; }
@@ -23,7 +27,7 @@ juce::StringArray KeyTempoProcessor::tempoScaleNames()  { return { "Half", "Norm
 juce::AudioProcessorValueTreeState::ParameterLayout KeyTempoProcessor::createLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
-    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { rangeId, 1 }, "Tempo Range", tempoRangeNames(), 0));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { genreId, 1 }, "Genre", genreNames(), 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { memoryId, 1 }, "Key Memory", keyMemoryNames(), 1));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { scaleId, 1 }, "Tempo Display", tempoScaleNames(), 1));
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { holdId, 1 }, "Hold", false));
@@ -37,7 +41,7 @@ KeyTempoProcessor::KeyTempoProcessor()
       juce::Thread ("KeyTempo analysis"),
       state (*this, nullptr, "KeyTempo", createLayout())
 {
-    rangeParam = state.getRawParameterValue (rangeId);
+    genreParam = state.getRawParameterValue (genreId);
     memoryParam = state.getRawParameterValue (memoryId);
     holdParam = state.getRawParameterValue (holdId);
 
@@ -142,7 +146,7 @@ void KeyTempoProcessor::readHostInfo()
 
 void KeyTempoProcessor::run()
 {
-    int lastRange = -1;
+    int lastGenre = -1;
     double lastMemory = -2.0;
 
     while (! threadShouldExit())
@@ -159,14 +163,16 @@ void KeyTempoProcessor::run()
                 fifo.read (fifo.getNumReady()); // discard queued audio (consumer side, so thread-safe)
                 engine.reset();
                 samplesSinceUpdate = 0;
+                clearHistory();
                 publish();
             }
 
-            const int range = juce::jlimit (0, 3, (int) rangeParam->load());
-            if (range != lastRange)
+            const int genre = juce::jlimit (0, (int) kt::Genre::numGenres - 1, (int) genreParam->load());
+            if (genre != lastGenre)
             {
-                engine.setTempoRange (tempoRanges[range].lo, tempoRanges[range].hi);
-                lastRange = range;
+                engine.setGenre ((kt::Genre) genre);
+                lastGenre = genre;
+                clearHistory();
             }
             const double memory = keyMemorySeconds[juce::jlimit (0, 3, (int) memoryParam->load())];
             if (! juce::exactlyEqual (memory, lastMemory))
@@ -196,6 +202,7 @@ void KeyTempoProcessor::run()
                         {
                             engine.update();
                             publish();
+                            pushHistory();
                         }
                         samplesSinceUpdate = 0;
                     }
@@ -215,6 +222,8 @@ void KeyTempoProcessor::publish()
     readout.tempoValid = t.valid;
     readout.bpm = (float) t.bpm;
     readout.tempoConfidence = t.confidence;
+    readout.feel = (int) t.feel;
+    readout.alternateBpm = (float) t.alternateBpm;
 
     const auto& k = engine.getKey();
     readout.keyValid = k.valid;
@@ -232,6 +241,24 @@ void KeyTempoProcessor::publish()
     readout.beatsPerBar = m.beatsPerBar;
     readout.compound = m.compound;
     readout.meterConfidence = m.confidence;
+}
+
+void KeyTempoProcessor::pushHistory()
+{
+    const auto& raw = engine.getRawTempo();
+    const int i = readout.historyWrite.load();
+    readout.history[(size_t) i] = raw.valid ? (float) raw.bpm : 0.0f;
+    readout.historyShown[(size_t) i] = engine.getTempo().valid ? (float) engine.getTempo().bpm : 0.0f;
+    readout.historyWrite = (i + 1) % Readout::historyLength;
+}
+
+void KeyTempoProcessor::clearHistory()
+{
+    for (size_t i = 0; i < (size_t) Readout::historyLength; ++i)
+    {
+        readout.history[i] = 0.0f;
+        readout.historyShown[i] = 0.0f;
+    }
 }
 
 juce::AudioProcessorEditor* KeyTempoProcessor::createEditor()

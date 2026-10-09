@@ -2,13 +2,19 @@
 
 ![KeyTempo](docs/screenshot.png)
 
-A utility plug-in that listens to whatever you put it on and tells you three things:
+A tempo analyzer plug-in built for the music other BPM detectors get wrong: drum & bass,
+jungle, dubstep, trap and rhythmically busy house and trance. It also shows the key
+(with relative key and Camelot code) and time signature.
 
-- **Tempo** — BPM to ±0.05, with ½× / 1× / 2× display and selectable range
-- **Key** — e.g. *A minor*, with its **relative key** (*C major*), Camelot code (*8A*) and tuning offset
-- **Time signature** — 4/4, 3/4, 6/8, 9/8 (12/8 and 2/4 are reported as 6/8 and 4/4)
+- **Tempo:** to ±0.05 BPM. It reads the groove (kick, snare and hat patterns), not just the
+  pulse, to choose between 87 and 174, 70 and 140, or 116 and 174.
+- **Genre:** Auto by default. Pick a genre to lock in DJ conventions (e.g. DnB is always
+  read at 150–190).
+- **Readings history:** 60 seconds of what each analysis window heard. Dots off the line
+  show where the music was ambiguous.
+- **Key** with relative key and Camelot code, plus **time signature** (4/4, 3/4, 6/8, 9/8).
 
-Audio passes through untouched. Analysis runs on a low-priority background thread (~4% of one core),
+Audio passes through untouched. Analysis runs on a background thread (~4% of one core),
 never on the audio thread.
 
 | Format     | Windows | macOS | Linux |
@@ -70,12 +76,21 @@ zipped builds. Pushing a `v*` tag creates a draft GitHub release with all three 
 
 All analysis lives in `src/core/` — plain C++ with no JUCE dependency, so it is unit-tested on its own.
 
-**Tempo** (`TempoDetector`) — A log-compressed spectral-flux onset envelope (~6 ms resolution) is
-autocorrelated over a 12-second window. Candidate tempos are scored on periodicity at 1–4 beats plus
-their subdivision, weighted by a tempo prior centred in the selected range. The top candidates are
-re-ranked by *beat salience* (do the weakest beats still land on real hits, rather than hi-hats?),
-which rejects 3:2 mistakes. The winner is then refined by phase-locking a pulse train to the onsets
-across the whole window, which is what gets precision to a few hundredths of a BPM.
+**Tempo** (`TempoDetector`, `GrooveModel`, `AnalysisEngine`)
+1. *Onsets:* spectral-flux envelopes (~6 ms resolution) for the full mix plus three instrument
+   bands: kick (< 110 Hz), snare/clap (mids × highs, which rejects synth stabs) and hats.
+2. *Candidates:* autocorrelation over a 12 s window gives periodicity peaks. Each strong peak
+   adds its 2×, ½×, 3:2 and 2:3 relatives, searched an octave beyond the genre range.
+3. *Groove:* at each candidate tempo the bands are folded into one 16-step bar and matched
+   against four-on-the-floor, backbeat and half-time templates, weighted by where those feels
+   live (four-on-the-floor 112–152, backbeat with snare on 2 & 4 up to ~186, half-time
+   dubstep/trap 128–160). At half the true tempo a DnB snare lands on 8th-note offbeats,
+   which no template accepts. At double tempo the hats leave the offbeats empty. Either way
+   the wrong reading loses.
+4. *Precision:* the winner is phase-locked to the onsets across the window (~0.01 BPM).
+5. *Memory:* every 0.4 s reading adds evidence to its tempo, weighted by confidence, groove
+   fit and how much kick is present compared with the track's drops. So intros, breakdowns
+   and build-up snare rolls barely count, and the reading firms up over the track (90 s memory).
 
 **Time signature** — With the beat known, a kick/bass-band envelope shows whether the bar repeats every
 2/4 beats or every 3, and the full-band envelope shows whether beats divide in two (simple) or three
@@ -88,22 +103,48 @@ tonic the bass keeps returning to — that's what separates a minor key from its
 
 ## Controls
 
-- **½× / 1× / 2×** — display the tempo halved or doubled (for half-time / double-time feels)
-- **Tempo range** — 70–180 (default), 50–100, 80–160, 100–200 BPM. Above ~150 BPM a backbeat is
-  genuinely ambiguous with its half-time feel; pick 100–200 for DnB, hardcore, fast punk, etc.
-- **Key memory** — how far back key evidence counts: 15 s, 45 s, 2 min or the whole track.
-  Shorter follows modulations; longer is steadier.
-- **Hold** freezes the readings; **Reset** forgets everything heard so far.
+- **Genre:** Auto, House / Techno (105–152), Trance (120–155), Drum & Bass / Jungle (150–190),
+  Dubstep / Trap (125–160), Hip-Hop / R&B (60–115), Pop / Rock / Other (60–200). A genre
+  narrows the range and the grooves considered, and anything outside the range is folded
+  into it (a DnB track under Hip-Hop reads 87, never an unrelated 116).
+- **½× / 1× / 2×:** show the tempo halved or doubled, if you count it differently.
+- **Hold** freezes the readings. **Reset** forgets everything heard so far (use it between tracks).
 
-## Known limitations (v0.1)
+## Testing tempo accuracy
 
-- Relative major/minor is the hardest call for any key detector. If a song never leans on its tonic
-  (equal time on every chord, no bass), KeyTempo may name the relative key; the card always shows
-  both, and the confidence bar drops when it's unsure.
-- Time signature covers 4/4, 3/4, 6/8 and 9/8. Odd meters (5/4, 7/8) are not detected yet, and
-  2/4 vs 4/4 and 6/8 vs 12/8 are not distinguished.
-- Results are estimates from listening; music with rubato, no percussion, or atonal content will
-  produce low confidence rather than a reliable answer.
+`tests/bench/GrooveLab.h` synthesises 40-bar tracks (intro, main, breakdown, drop) in 15 styles:
+house, tech house, trance, prog with dotted-8th percussion, techno with 3-step loops, DnB
+two-step, amen/jungle, neurofunk, liquid, halftime DnB, dubstep, trap, boom bap, UK garage and
+pop/rock, at their typical tempos (63 clips). `--hard` adds dotted-8th delays, reverb, triplet
+percussion, snare-roll build-ups and dropped kicks.
+
+```bash
+cmake -S . -B build-core -DKT_BUILD_PLUGIN=OFF && cmake --build build-core
+build-core/kt_tempo_bench                 # Auto
+build-core/kt_tempo_bench --hard --genre  # hard mode, also with genre presets
+build-core/kt_tempo_bench --wav out/      # write the clips to listen to
+```
+
+| | Correct at end | Correct from 12 s on |
+|---|---|---|
+| v0.1 (Auto) | 39 / 63 | 56% |
+| v0.2 (Auto) | 63 / 63 | 99% |
+| v0.2 (Auto, hard) | 63 / 63 | 98% |
+
+Synthetic clips only prove the logic works. Real tracks are the real test:
+`kt_tool analyze --genre auto song.mp3` prints what the plug-in would show.
+
+## Known limitations
+
+- Halftime DnB (snare only on beat 3 at 170–175) reads as 85–87 in Auto, the same as a hip-hop
+  backbeat. Choose the Drum & Bass genre to read it at 170–175.
+- Tracks with no drums at all fall back to plain periodicity and are less reliable.
+  Confidence drops to show it.
+- Tempo changes within a track (DJ mixes, live recordings) are followed, but slowly, because
+  of the 90 s memory. Press Reset when the track changes.
+- Key: relative major/minor is the hardest call. If a song never leans on its tonic, the
+  relative key may be shown.
+- Time signature covers 4/4, 3/4, 6/8 and 9/8. Odd meters (5/4, 7/8) aren't detected yet.
 - Builds are unsigned. On macOS, Gatekeeper may block them until you run
   `xattr -dr com.apple.quarantine <plugin>` or sign/notarize them.
 
@@ -117,8 +158,8 @@ PACE signing.
 ## Project layout
 
 ```
-src/core/      analysis engine (no JUCE): FFT, tempo/meter, key, music theory
+src/core/      analysis engine (no JUCE): FFT, tempo + groove model, meter, key, music theory
 src/plugin/    JUCE processor, editor and look-and-feel
-tests/         unit tests with synthesised grooves and chord progressions
+tests/         unit tests, tempo benchmark (TempoBench.cpp) and the GrooveLab track generator
 tools/         kt_tool: offline analyzer and UI snapshot
 ```

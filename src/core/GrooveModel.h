@@ -30,6 +30,7 @@ struct GrooveFit
     double halftime = 0.0;
     double offbeatHats = 1.0; // 0..1: are 8th offbeats populated? (low = tempo likely 2x too fast)
     double plausibility = 0.0; // 0..1: best template strength x genre/tempo plausibility
+    bool syncopatedKick = false; // a large share of kick hits fall between the beats
     Feel feel = Feel::Unknown;
 };
 

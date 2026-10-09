@@ -4,6 +4,7 @@
 //   kt_tempo_bench --genre         Also run with the matching genre preset
 //   kt_tempo_bench --only DnB      Only styles whose name contains the text
 //   kt_tempo_bench --wav DIR       Also write each clip as a WAV (for listening)
+//   kt_tempo_bench --min N         Exit with an error if fewer than N clips are correct (CI)
 //   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
 //
@@ -16,6 +17,7 @@
 #include "bench/GrooveLab.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -128,7 +130,7 @@ Result run (const groove::Case& c, Genre genre, unsigned seed, const char* wavDi
              t.valid ? std::string (feelName (t.feel)) : std::string ("-") };
 }
 
-void runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* wavDir)
+int runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* wavDir)
 {
     auto cases = groove::benchmarkCases();
     if (filter != nullptr)
@@ -172,6 +174,7 @@ void runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* 
     for (auto& [name, s] : byStyle)
         std::printf ("  %s %d/%d", name.c_str(), s.first, s.second);
     std::printf ("\nTOTAL: %d/%zu correct at end, mean stability %.0f%%\n", ok, results.size(), 100.0 * stableSum / (double) results.size());
+    return ok;
 }
 } // namespace
 
@@ -180,16 +183,23 @@ int main (int argc, char** argv)
     bool preset = false;
     const char* filter = nullptr;
     const char* wavDir = nullptr;
+    int minCorrect = 0;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp (argv[i], "--genre") == 0) preset = true;
         else if (std::strcmp (argv[i], "--only") == 0 && i + 1 < argc) filter = argv[++i];
         else if (std::strcmp (argv[i], "--wav") == 0 && i + 1 < argc) wavDir = argv[++i];
         else if (std::strcmp (argv[i], "--hard") == 0) hardMode = true;
+        else if (std::strcmp (argv[i], "--min") == 0 && i + 1 < argc) minCorrect = std::atoi (argv[++i]);
         else if (std::strcmp (argv[i], "--seed") == 0 && i + 1 < argc) seedOffset = (unsigned) std::atoi (argv[++i]);
     }
-    runAll (Genre::Auto, false, filter, wavDir);
+    int worst = runAll (Genre::Auto, false, filter, wavDir);
     if (preset)
-        runAll (Genre::Auto, true, filter, nullptr);
+        worst = std::min (worst, runAll (Genre::Auto, true, filter, nullptr));
+    if (minCorrect > 0 && worst < minCorrect)
+    {
+        std::printf ("FAILED: fewer than %d correct\n", minCorrect);
+        return 1;
+    }
     return 0;
 }

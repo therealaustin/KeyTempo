@@ -11,7 +11,14 @@
 struct Readout
 {
     std::atomic<bool> tempoValid { false };
-    std::atomic<float> bpm { 0.0f }, tempoConfidence { 0.0f };
+    std::atomic<float> bpm { 0.0f }, tempoConfidence { 0.0f }, alternateBpm { 0.0f };
+    std::atomic<int> feel { 0 };
+
+    // Last 60 s of readings (one per 0.4 s analysis update): what each window heard,
+    // and what was shown. Index `historyWrite` is the oldest entry.
+    static constexpr int historyLength = 150;
+    std::array<std::atomic<float>, historyLength> history {}, historyShown {};
+    std::atomic<int> historyWrite { 0 };
 
     std::atomic<bool> keyValid { false };
     std::atomic<int> key { -1 }, runnerUp { -1 };
@@ -66,7 +73,7 @@ public:
     juce::AudioProcessorValueTreeState& getState() noexcept { return state; }
     const Readout& getReadout() const noexcept { return readout; }
 
-    static juce::StringArray tempoRangeNames();
+    static juce::StringArray genreNames();
     static juce::StringArray keyMemoryNames();
     static juce::StringArray tempoScaleNames();
 
@@ -76,11 +83,13 @@ private:
 
     void run() override; // analysis thread
     void publish();
+    void pushHistory();
+    void clearHistory();
     void readHostInfo();
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     juce::AudioProcessorValueTreeState state;
-    std::atomic<float>* rangeParam = nullptr;
+    std::atomic<float>* genreParam = nullptr;
     std::atomic<float>* memoryParam = nullptr;
     std::atomic<float>* holdParam = nullptr;
 

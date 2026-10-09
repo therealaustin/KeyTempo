@@ -59,7 +59,7 @@ struct Clip
 class Synth
 {
 public:
-    Synth (std::vector<float>& out, double sr, unsigned seed) : buf (out), sr (sr), rng (seed) {}
+    Synth (std::vector<float>& out, double sampleRate, unsigned seed) : buf (out), sr (sampleRate), rng (seed) {}
 
     float noise() { return dist (rng); }
     float rand01() { return 0.5f * (dist (rng) + 1.0f); }
