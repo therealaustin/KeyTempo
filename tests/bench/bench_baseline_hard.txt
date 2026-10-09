@@ -1,0 +1,138 @@
+
+=== Auto (hard) ===
+style                   true      got   conf  stable  class  feel
+House                 118.00   118.00   1.00    100%  ok     -
+House                 122.00   122.00   1.00     95%  ok     -
+House                 124.00   124.00   1.00     89%  ok     -
+House                 126.00   126.00   1.00    100%  ok     -
+House                 128.00   128.01   1.00    100%  ok     -
+Tech house            124.00   123.99   1.00    100%  ok     -
+Tech house            125.00   125.00   1.00     93%  ok     -
+Tech house            126.00   126.02   1.00     98%  ok     -
+Tech house            128.00   127.99   1.00     97%  ok     -
+Trance                128.00   128.00   1.00     85%  ok     -
+Trance                132.00   132.00   1.00     97%  ok     -
+Trance                136.00   136.00   1.00     96%  ok     -
+Trance                138.00   138.00   1.00     97%  ok     -
+Trance                140.00    70.00   1.00     23%  half   -
+Prog (dotted perc)    120.00   120.00   1.00     95%  ok     -
+Prog (dotted perc)    124.00   124.00   0.72     98%  ok     -
+Prog (dotted perc)    128.00   128.00   1.00    100%  ok     -
+Prog (dotted perc)    132.00   132.01   1.00     94%  ok     -
+Techno                128.00   127.99   1.00    100%  ok     -
+Techno                132.00   132.00   1.00     95%  ok     -
+Techno                136.00   136.00   1.00     90%  ok     -
+Techno                140.00   140.01   0.81     76%  ok     -
+Techno                145.00    96.67   1.00     29%  2:3    -
+DnB two-step          160.00    80.00   1.00      7%  half   -
+DnB two-step          168.00    84.02   1.00      0%  half   -
+DnB two-step          170.00    85.00   1.00      0%  half   -
+DnB two-step          172.00    86.01   1.00      0%  half   -
+DnB two-step          174.00    87.00   1.00      0%  half   -
+DnB two-step          176.00    88.00   1.00      0%  half   -
+DnB two-step          178.00    89.01   1.00      0%  half   -
+DnB amen/jungle       160.00    80.00   1.00      9%  half   -
+DnB amen/jungle       165.00    82.51   1.00      7%  half   -
+DnB amen/jungle       170.00    85.00   1.00      1%  half   -
+DnB amen/jungle       174.00    87.01   1.00      0%  half   -
+Neurofunk             172.00    86.01   1.00      0%  half   -
+Neurofunk             174.00    87.00   1.00      0%  half   -
+Neurofunk             175.00    87.52   1.00      0%  half   -
+Liquid DnB            170.00    85.00   1.00      0%  half   -
+Liquid DnB            172.00    86.01   1.00      0%  half   -
+Liquid DnB            174.00    87.00   1.00      0%  half   -
+DnB halftime          170.00    85.00   1.00    100%  ok     -
+DnB halftime          174.00    87.01   1.00     90%  ok     -
+Dubstep               138.00   137.99   1.00     99%  ok     -
+Dubstep               140.00    70.01   1.00     26%  half   -
+Dubstep               142.00    71.01   1.00     32%  half   -
+Dubstep               150.00    75.00   1.00      8%  half   -
+Trap                  130.00   130.01   1.00     78%  ok     -
+Trap                  140.00    70.00   0.95     30%  half   -
+Trap                  145.00    72.51   0.97     22%  half   -
+Trap                  150.00    75.00   0.96     24%  half   -
+Boom bap               85.00    84.99   1.00     91%  ok     -
+Boom bap               88.00    88.00   1.00     94%  ok     -
+Boom bap               90.00    90.00   1.00     96%  ok     -
+Boom bap               93.00    93.00   1.00     93%  ok     -
+Boom bap               96.00    96.01   1.00     96%  ok     -
+UK garage             130.00   130.00   1.00     92%  ok     -
+UK garage             132.00   132.00   1.00     80%  ok     -
+UK garage             134.00   134.00   1.00     87%  ok     -
+UK garage             136.00   136.00   1.00     92%  ok     -
+Pop/rock              100.00   100.00   1.00     96%  ok     -
+Pop/rock              110.00   109.99   1.00    100%  ok     -
+Pop/rock              120.00   120.00   1.00     95%  ok     -
+Pop/rock              128.00   128.01   1.00    100%  ok     -
+
+By style:  Boom bap 5/5  DnB amen/jungle 0/4  DnB halftime 2/2  DnB two-step 0/7  Dubstep 1/4  House 5/5  Liquid DnB 0/3  Neurofunk 0/3  Pop/rock 4/4  Prog (dotted perc) 4/4  Tech house 4/4  Techno 4/5  Trance 4/5  Trap 1/4  UK garage 4/4
+TOTAL: 38/63 correct at end, mean stability 60%
+
+=== Genre preset (hard) ===
+style                   true      got   conf  stable  class  feel
+House                 118.00   118.00   1.00    100%  ok     -
+House                 122.00   122.00   1.00    100%  ok     -
+House                 124.00   124.00   1.00    100%  ok     -
+House                 126.00   126.00   1.00    100%  ok     -
+House                 128.00   128.01   1.00    100%  ok     -
+Tech house            124.00   123.99   1.00    100%  ok     -
+Tech house            125.00   125.00   1.00    100%  ok     -
+Tech house            126.00   126.02   1.00    100%  ok     -
+Tech house            128.00   127.99   1.00    100%  ok     -
+Trance                128.00   128.00   0.83    100%  ok     -
+Trance                132.00   132.00   0.82    100%  ok     -
+Trance                136.00   136.00   0.83    100%  ok     -
+Trance                138.00   138.00   0.77    100%  ok     -
+Trance                140.00   140.01   0.75    100%  ok     -
+Prog (dotted perc)    120.00   120.00   1.00    100%  ok     -
+Prog (dotted perc)    124.00   124.01   1.00    100%  ok     -
+Prog (dotted perc)    128.00   128.00   1.00    100%  ok     -
+Prog (dotted perc)    132.00   132.01   0.94    100%  ok     -
+Techno                128.00   127.99   1.00    100%  ok     -
+Techno                132.00   132.00   0.96    100%  ok     -
+Techno                136.00   136.00   0.99     99%  ok     -
+Techno                140.00   140.00   0.89    100%  ok     -
+Techno                145.00   145.00   0.84    100%  ok     -
+DnB two-step          160.00   160.01   0.74    100%  ok     -
+DnB two-step          168.00   168.01   0.69    100%  ok     -
+DnB two-step          170.00   170.00   0.66    100%  ok     -
+DnB two-step          172.00   172.01   0.69    100%  ok     -
+DnB two-step          174.00   174.01   0.64    100%  ok     -
+DnB two-step          176.00   176.01   0.63    100%  ok     -
+DnB two-step          178.00   178.01   0.67    100%  ok     -
+DnB amen/jungle       160.00   160.00   0.86    100%  ok     -
+DnB amen/jungle       165.00   165.01   0.79    100%  ok     -
+DnB amen/jungle       170.00   170.01   0.74    100%  ok     -
+DnB amen/jungle       174.00   174.02   0.73    100%  ok     -
+Neurofunk             172.00   172.02   0.74    100%  ok     -
+Neurofunk             174.00   174.00   0.68    100%  ok     -
+Neurofunk             175.00   175.03   0.72    100%  ok     -
+Liquid DnB            170.00   170.01   0.69    100%  ok     -
+Liquid DnB            172.00   172.01   0.74    100%  ok     -
+Liquid DnB            174.00   174.01   0.67    100%  ok     -
+DnB halftime          170.00   170.00   0.66    100%  ok     -
+DnB halftime          174.00   174.01   0.62    100%  ok     -
+Dubstep               138.00   137.99   0.94    100%  ok     -
+Dubstep               140.00   140.00   0.88    100%  ok     -
+Dubstep               142.00   142.01   0.75    100%  ok     -
+Dubstep               150.00   150.00   0.81    100%  ok     -
+Trap                  130.00   130.01   0.92    100%  ok     -
+Trap                  140.00   139.99   0.81    100%  ok     -
+Trap                  145.00   144.99   0.75    100%  ok     -
+Trap                  150.00   150.00   0.77    100%  ok     -
+Boom bap               85.00    84.99   1.00     98%  ok     -
+Boom bap               88.00    88.00   1.00    100%  ok     -
+Boom bap               90.00    90.00   1.00     92%  ok     -
+Boom bap               93.00    93.00   1.00     94%  ok     -
+Boom bap               96.00    96.01   1.00     99%  ok     -
+UK garage             130.00   130.00   1.00    100%  ok     -
+UK garage             132.00   132.00   1.00     95%  ok     -
+UK garage             134.00   134.00   0.99     99%  ok     -
+UK garage             136.00   136.00   1.00    100%  ok     -
+Pop/rock              100.00   100.00   1.00     99%  ok     -
+Pop/rock              110.00   109.99   1.00    100%  ok     -
+Pop/rock              120.00   120.00   1.00     90%  ok     -
+Pop/rock              128.00   128.01   1.00     90%  ok     -
+
+By style:  Boom bap 5/5  DnB amen/jungle 4/4  DnB halftime 2/2  DnB two-step 7/7  Dubstep 4/4  House 5/5  Liquid DnB 3/3  Neurofunk 3/3  Pop/rock 4/4  Prog (dotted perc) 4/4  Tech house 4/4  Techno 5/5  Trance 5/5  Trap 4/4  UK garage 4/4
+TOTAL: 63/63 correct at end, mean stability 99%

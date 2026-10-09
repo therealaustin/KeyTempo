@@ -53,6 +53,12 @@ if(KT_BUILD_TESTS)
     add_executable(kt_core_tests tests/CoreTests.cpp)
     target_link_libraries(kt_core_tests PRIVATE kt_core)
     add_test(NAME kt_core_tests COMMAND kt_core_tests)
+
+    # Tempo benchmark over synthesised genre tracks (not part of ctest; run it by hand).
+    add_executable(kt_tempo_bench tests/TempoBench.cpp)
+    target_link_libraries(kt_tempo_bench PRIVATE kt_core)
+    find_package(Threads REQUIRED)
+    target_link_libraries(kt_tempo_bench PRIVATE Threads::Threads)
 endif()
 
 if(NOT KT_BUILD_PLUGIN)

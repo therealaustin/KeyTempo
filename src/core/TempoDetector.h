@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Fft.h"
+#include "Genre.h"
 
 #include <cstdint>
 #include <memory>
@@ -13,6 +14,7 @@ struct TempoResult
     double bpm = 0.0;
     float confidence = 0.0f; // 0..1
     bool valid = false;
+    Feel feel = Feel::Unknown;
 
     // Raw meter evidence for this window (see TempoDetector::analyse). The engine
     // accumulates these over time before deciding on a time signature.

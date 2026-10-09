@@ -23,6 +23,7 @@ public:
     void reset();
 
     void setTempoRange (double minBpm, double maxBpm);
+    void setGenre (Genre g) { const auto r = g == Genre::Auto ? TempoRange { 70.0, 180.0 } : tempoRangeFor (g); setTempoRange (r.lo, r.hi); }
     void setKeyMemorySeconds (double seconds);
 
     void push (const float* mono, int numSamples);
