@@ -4,6 +4,7 @@
 //   kt_tempo_bench --genre         Also run with the matching genre preset
 //   kt_tempo_bench --only DnB      Only styles whose name contains the text
 //   kt_tempo_bench --wav DIR       Also write each clip as a WAV (for listening)
+//   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
 //
 // For each clip the engine runs like the plug-in does (0.4 s updates). Reported:
@@ -16,6 +17,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -90,6 +92,7 @@ void writeWav (const std::string& path, const std::vector<float>& a, double sr)
 }
 
 bool hardMode = false;
+unsigned seedOffset = 0;
 
 Result run (const groove::Case& c, Genre genre, unsigned seed, const char* wavDir)
 {
@@ -141,7 +144,7 @@ void runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* 
             for (size_t i; (i = next++) < cases.size();)
             {
                 const Genre g = usePreset ? presetFor (cases[i].style) : forcedGenre;
-                results[i] = run (cases[i], g, (unsigned) (cases[i].bpm * 10) + (unsigned) cases[i].style * 1000, wavDir);
+                results[i] = run (cases[i], g, (unsigned) (cases[i].bpm * 10) + (unsigned) cases[i].style * 1000 + seedOffset * 7919u, wavDir);
             }
         });
     for (auto& t : pool)
@@ -183,6 +186,7 @@ int main (int argc, char** argv)
         else if (std::strcmp (argv[i], "--only") == 0 && i + 1 < argc) filter = argv[++i];
         else if (std::strcmp (argv[i], "--wav") == 0 && i + 1 < argc) wavDir = argv[++i];
         else if (std::strcmp (argv[i], "--hard") == 0) hardMode = true;
+        else if (std::strcmp (argv[i], "--seed") == 0 && i + 1 < argc) seedOffset = (unsigned) std::atoi (argv[++i]);
     }
     runAll (Genre::Auto, false, filter, wavDir);
     if (preset)

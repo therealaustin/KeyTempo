@@ -3,6 +3,8 @@
 #include "KeyDetector.h"
 #include "TempoDetector.h"
 
+#include <vector>
+
 namespace kt
 {
 struct MeterResult
@@ -23,7 +25,7 @@ public:
     void reset();
 
     void setTempoRange (double minBpm, double maxBpm);
-    void setGenre (Genre g) { const auto r = g == Genre::Auto ? TempoRange { 70.0, 180.0 } : tempoRangeFor (g); setTempoRange (r.lo, r.hi); }
+    void setGenre (Genre g) { genre = g; const auto r = tempoRangeFor (g); setTempoRange (r.lo, r.hi); }
     void setKeyMemorySeconds (double seconds);
 
     void push (const float* mono, int numSamples);
@@ -32,6 +34,8 @@ public:
     void update();
 
     const TempoResult& getTempo() const noexcept { return tempo; }
+    /** The latest single-window reading (what the detector hears right now). */
+    const TempoResult& getRawTempo() const noexcept { return lastRaw; }
     const KeyResult& getKey() const noexcept { return key; }
     const MeterResult& getMeter() const noexcept { return meter; }
 
@@ -40,12 +44,23 @@ private:
     KeyDetector keyDetector;
 
     double sampleRate = 44100.0;
-    double minBpm = 70.0, maxBpm = 180.0;
+    double minBpm = 60.0, maxBpm = 200.0;
+    Genre genre = Genre::Auto;
     double signalSeconds = 0.0;
 
-    TempoResult tempo;
-    double pendingBpm = 0.0;
-    int pendingCount = 0;
+    TempoResult tempo, lastRaw;
+
+    /** One tempo reading the track might have, with its accumulated evidence. */
+    struct Hypothesis
+    {
+        double bpm, weight, bpmWeight;
+        Feel feel;
+        float grooveFit;
+    };
+    std::vector<Hypothesis> hypotheses;
+    double tempoMemorySeconds = 90.0;
+    static constexpr double updateIntervalSeconds = 0.4; // how often the host calls update()
+    void updateTempoMemory (const TempoResult& raw);
 
     MeterResult meter;
     double dupleAcc = 0.0, tripleAcc = 0.0, compoundAcc = 0.0, meterWeight = 0.0;

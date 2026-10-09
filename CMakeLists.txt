@@ -38,6 +38,7 @@ endif()
 add_library(kt_core STATIC
     src/core/Fft.cpp
     src/core/TempoDetector.cpp
+    src/core/GrooveModel.cpp
     src/core/KeyDetector.cpp
     src/core/MusicTheory.cpp
     src/core/AnalysisEngine.cpp)

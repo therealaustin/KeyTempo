@@ -20,11 +20,11 @@ void AnalysisEngine::reset()
     tempoDetector.reset();
     keyDetector.reset();
     tempo = {};
+    lastRaw = {};
+    hypotheses.clear();
     key = {};
     meter = {};
     dupleAcc = tripleAcc = compoundAcc = meterWeight = 0.0;
-    pendingBpm = 0.0;
-    pendingCount = 0;
     pendingKey = -1;
     pendingKeyCount = 0;
     signalSeconds = 0.0;
@@ -37,7 +37,8 @@ void AnalysisEngine::setTempoRange (double lo, double hi)
         minBpm = lo;
         maxBpm = hi;
         tempo = {}; // re-acquire inside the new range
-        pendingCount = 0;
+        lastRaw = {};
+        hypotheses.clear();
         meter = {};
         dupleAcc = tripleAcc = compoundAcc = meterWeight = 0.0;
     }
@@ -62,44 +63,15 @@ void AnalysisEngine::push (const float* mono, int numSamples)
 
 void AnalysisEngine::update()
 {
-    // ---- Tempo: follow small drifts smoothly, but only jump after a change persists.
-    const auto raw = tempoDetector.analyse (minBpm, maxBpm);
-    if (raw.valid)
+    // ---- Tempo: accumulate evidence for each distinct tempo hypothesis over the track.
+    const auto raw = tempoDetector.analyse (minBpm, maxBpm, genre);
+    const double previousBpm = tempo.valid ? tempo.bpm : 0.0;
+    updateTempoMemory (raw);
+    if (tempo.valid && previousBpm > 0.0 && std::abs (tempo.bpm - previousBpm) / previousBpm > 0.03)
     {
-        if (! tempo.valid)
-        {
-            tempo = raw;
-        }
-        else if (std::abs (raw.bpm - tempo.bpm) / tempo.bpm < 0.02)
-        {
-            tempo.bpm = 0.8 * tempo.bpm + 0.2 * raw.bpm;
-            tempo.confidence = 0.7f * tempo.confidence + 0.3f * raw.confidence;
-            pendingCount = 0;
-        }
-        else
-        {
-            if (pendingCount > 0 && std::abs (raw.bpm - pendingBpm) / pendingBpm < 0.02)
-                ++pendingCount;
-            else
-            {
-                pendingBpm = raw.bpm;
-                pendingCount = 1;
-            }
-
-            tempo.confidence *= 0.85f;
-            if (pendingCount >= 4 || raw.confidence > tempo.confidence + 0.3f)
-            {
-                tempo = raw;
-                pendingCount = 0;
-                // The beat changed, so the bar grouping must be re-learned.
-                dupleAcc = tripleAcc = compoundAcc = meterWeight = 0.0;
-                meter.valid = false;
-            }
-        }
-    }
-    else if (tempo.valid)
-    {
-        tempo.confidence *= 0.97f; // hold the last value through breaks, fading confidence
+        // The beat changed, so the bar grouping must be re-learned.
+        dupleAcc = tripleAcc = compoundAcc = meterWeight = 0.0;
+        meter.valid = false;
     }
 
     if (raw.valid && tempo.valid && std::abs (raw.bpm - tempo.bpm) / tempo.bpm < 0.02)
@@ -175,5 +147,88 @@ void AnalysisEngine::updateMeter (const TempoResult& raw)
                                 * std::min (1.0, meterWeight / 0.6))
                        * tempo.confidence;
     meter.valid = true;
+}
+
+void AnalysisEngine::updateTempoMemory (const TempoResult& raw)
+{
+    // Evidence decays slowly (the "memory"), so a long track builds a stable answer and
+    // breakdowns, intros and fills can't overturn it, yet a real tempo change still wins.
+    const double decay = std::exp (-updateIntervalSeconds / tempoMemorySeconds);
+    for (auto& h : hypotheses)
+        h.weight *= decay;
+
+    if (raw.valid)
+    {
+        // Readings backed by a recognisable groove (drums playing) count far more than
+        // readings from pads, vocals or a breakdown.
+        // Windows without a kick (breakdowns, build-up snare rolls) count very little.
+        const double w = (0.1 + raw.confidence) * (0.08 + raw.grooveFit) * (0.1 + 0.9 * raw.drumPresence);
+
+        Hypothesis* match = nullptr;
+        for (auto& h : hypotheses)
+            if (std::abs (h.bpm - raw.bpm) / h.bpm < 0.015 && (match == nullptr || h.weight > match->weight))
+                match = &h;
+        if (match == nullptr)
+        {
+            hypotheses.push_back ({ raw.bpm, 0.0, 0.0, Feel::Unknown, 0.0f });
+            match = &hypotheses.back();
+        }
+
+        // Precise tempo: confidence-weighted average of readings that agree (~20 s of
+        // readings), which averages away per-window jitter.
+        const double avgDecay = std::exp (-updateIntervalSeconds / 20.0);
+        match->bpmWeight = match->bpmWeight * avgDecay + w;
+        match->bpm += (raw.bpm - match->bpm) * (w / match->bpmWeight);
+        match->weight += w;
+        if (raw.feel != Feel::Unknown)
+        {
+            match->feel = raw.feel;
+            match->grooveFit = raw.grooveFit;
+        }
+        lastRaw = raw;
+    }
+
+    // Forget hypotheses that no longer matter.
+    hypotheses.erase (std::remove_if (hypotheses.begin(), hypotheses.end(), [] (const Hypothesis& h) { return h.weight < 1.0e-4; }),
+                      hypotheses.end());
+    if (hypotheses.empty())
+    {
+        tempo.valid = false;
+        return;
+    }
+
+    double total = 0.0;
+    const Hypothesis* best = nullptr;
+    const Hypothesis* current = nullptr;
+    for (auto& h : hypotheses)
+    {
+        total += h.weight;
+        if (best == nullptr || h.weight > best->weight)
+            best = &h;
+        if (tempo.valid && std::abs (h.bpm - tempo.bpm) / tempo.bpm < 0.015 && (current == nullptr || h.weight > current->weight))
+            current = &h;
+    }
+
+    // Hysteresis: a challenger must clearly out-weigh what is on screen.
+    const Hypothesis* shown = (current != nullptr && best->weight < 1.3 * current->weight) ? current : best;
+
+    // Strongest other reading that isn't just the same tempo.
+    const Hypothesis* alternate = nullptr;
+    for (auto& h : hypotheses)
+        if (&h != shown && std::abs (h.bpm - shown->bpm) / shown->bpm > 0.03 && (alternate == nullptr || h.weight > alternate->weight))
+            alternate = &h;
+
+    tempo.valid = true;
+    tempo.bpm = shown->bpm;
+    tempo.feel = shown->feel;
+    tempo.grooveFit = shown->grooveFit;
+    tempo.alternateBpm = alternate != nullptr ? alternate->bpm : 0.0;
+
+    // Confidence: share of all evidence behind this tempo, scaled by how much evidence
+    // there is yet (a couple of seconds of drums shouldn't read as 100%).
+    const double share = shown->weight / total;
+    const double amount = 1.0 - std::exp (-shown->weight / 1.5);
+    const float target = (float) std::clamp (share * amount * 1.15, 0.0, 1.0);
+    tempo.confidence += (target - tempo.confidence) * 0.3f;
 }
 } // namespace kt

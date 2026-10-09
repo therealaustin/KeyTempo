@@ -243,9 +243,8 @@ int main()
     std::printf ("Tempo\n");
     for (double bpm : { 72.0, 85.0, 90.0, 100.5, 120.0, 128.0, 140.0 })
         testTempo (bpm, 44100.0);
-    // Above ~150 BPM a backbeat is genuinely ambiguous with its half-time feel; the
-    // default range reports half-time, the "fast" range reports the full tempo.
-    testTempo (160.0, 44100.0, 70, 180, 80.0);
+    // A backbeat at 160 is read as 160 (DnB / fast rock), not as an 80 BPM half-time feel.
+    testTempo (160.0, 44100.0, 70, 180);
     testTempo (160.0, 44100.0, 100, 200);
     testTempo (174.0, 44100.0, 100, 200);
     testTempo (124.0, 48000.0);
