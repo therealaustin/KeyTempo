@@ -20,7 +20,7 @@ constexpr double pi = 3.14159265358979323846;
 enum class Style
 {
     House, TechHouse, Trance, ProgDotted, Techno,
-    DnbTwoStep, DnbAmen, Neurofunk, Liquid, DnbHalftime,
+    DnbTwoStep, DnbAmen, Neurofunk, Liquid, DnbHalftime, DnbRolling,
     Dubstep, Trap, BoomBap, UKGarage, PopRock
 };
 
@@ -38,6 +38,7 @@ inline const char* styleName (Style s)
         case Style::Neurofunk:   return "Neurofunk";
         case Style::Liquid:      return "Liquid DnB";
         case Style::DnbHalftime: return "DnB halftime";
+        case Style::DnbRolling:  return "DnB rolling 3:2";
         case Style::Dubstep:     return "Dubstep";
         case Style::Trap:        return "Trap";
         case Style::BoomBap:     return "Boom bap";
@@ -275,7 +276,7 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
     std::string kickP, snareP, clapP, hatP, ohatP, shakerP, percP, bassP;
     int patternBars = 1;
     bool fourOnFloorDucking = false, rollingBass = false, reese = false, use808 = false, dotted = false, amenFill = false;
-    bool wobble = false, neuroStabs = false, arpInMain = false;
+    bool wobble = false, neuroStabs = false, arpInMain = false, dottedRiff = false;
 
     switch (style)
     {
@@ -328,6 +329,13 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
             kickP = "X.........X.....";  snareP = "....X..o....X..o";
             hatP = "x.x.x.x.x.x.x.x."; shakerP = "oooooooooooooooo"; reese = false;
             arpInMain = true;
+            break;
+        case Style::DnbRolling:
+            // Modelled on tracks like ACP & Jenks "Rinseout": two-step kick, a quieter
+            // snare, a ride on every beat (including beat 3) and a loud bass riff in
+            // dotted quarters, which makes 116 the strongest periodicity.
+            kickP = "X.........X.....";  snareP = "....x.......x...";
+            hatP = "X...X...X...X..."; shakerP = "..o...o...o...o."; dottedRiff = true;
             break;
         case Style::DnbHalftime:
             kickP = "X.....X...X.....";  snareP = "........X.......";
@@ -398,6 +406,17 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
                 for (int s = 12; s < 16; ++s)
                     d.snare (t0 + s * step, 0.5f + 0.1f * (s - 12));
         }
+
+        if (dottedRiff && L.bass)
+            for (int s = 0; s < 16; ++s)
+                if (((bar * 16 + s) % 6) == 0)
+                {
+                    // Distorted mid-range stab with a noisy attack: loud in the mids and
+                    // highs (like the real track), but no kick-like thump in the sub.
+                    m.saw (t0 + s * step, step * 2.5, midiToHz (chord + 12), 2.2f, 0.004, 3000.0, 0.012);
+                    d.snare (t0 + s * step, 0.45f);
+                    d.hat (t0 + s * step, 0.8f, 0.04);
+                }
 
         if (dotted && ! breakdown && ! intro)
             for (int s = 0; s < 16; ++s)
@@ -528,6 +547,7 @@ inline std::vector<Case> benchmarkCases()
     add (Style::Neurofunk,   { 172, 174, 175 });
     add (Style::Liquid,      { 170, 172, 174 });
     add (Style::DnbHalftime, { 170, 174 });
+    add (Style::DnbRolling,  { 172, 174, 175 });
     add (Style::Dubstep,     { 138, 140, 142, 150 });
     add (Style::Trap,        { 130, 140, 145, 150 });
     add (Style::BoomBap,     { 85, 88, 90, 93, 96 });

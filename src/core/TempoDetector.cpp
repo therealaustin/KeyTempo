@@ -101,7 +101,7 @@ namespace
     }
 } // namespace
 
-void TempoDetector::prepare (double sr, double windowSeconds)
+void TempoDetector::prepare (double sr, double windowSeconds, double precisionSeconds)
 {
     sampleRate = sr;
 
@@ -126,7 +126,8 @@ void TempoDetector::prepare (double sr, double windowSeconds)
     prevMid.assign ((size_t) frameSize / 2 + 1, 0.0f);
     prevHigh.assign ((size_t) frameSize / 2 + 1, 0.0f);
 
-    const auto envCapacity = (size_t) std::ceil (windowSeconds * envRate);
+    windowFrames = (int) std::ceil (windowSeconds * envRate);
+    const auto envCapacity = (size_t) std::ceil (std::max (windowSeconds, precisionSeconds) * envRate);
     env.assign (envCapacity, 0.0f);
     lowEnv.assign (envCapacity, 0.0f);
     accentEnv.assign (envCapacity, 0.0f);
@@ -248,7 +249,7 @@ void TempoDetector::processFrame()
 TempoResult TempoDetector::analyse (double minBpm, double maxBpm, Genre genre) const
 {
     TempoResult result;
-    const int n = envCount;
+    const int n = std::min (envCount, windowFrames);
     const int capacity = (int) env.size();
 
     // Need at least ~4 seconds of audio and enough of it to be non-silent.
@@ -535,7 +536,43 @@ TempoResult TempoDetector::analyse (double minBpm, double maxBpm, Genre genre) c
         return result;
 
     const double octave = shownBpm / winner->bpm; // 1, 0.5, 2 ...
-    const double bestBpm = phaseLock (winner->bpm, 0.3, 0.01) * octave;
+    // Fine tempo over the longer precision window (if it has more audio than the analysis
+    // window): more beats to lock to means a more precise BPM.
+    double bestBpm = phaseLock (winner->bpm, 0.3, 0.01) * octave;
+    if (envCount > n + (int) (4.0 * envRate))
+    {
+        const int nl = envCount;
+        std::vector<float> el2 ((size_t) nl);
+        for (int i = 0; i < nl; ++i)
+            el2[(size_t) i] = env[(size_t) ((envWrite - nl + i + capacity) % capacity)];
+        const auto condLong = conditionEnvelope (el2, envRate);
+        auto alignLong = [&] (double bpm)
+        {
+            const double period = 60.0 * envRate / bpm;
+            double best = -1.0e9;
+            for (double phase = 0.0; phase < period; phase += 0.5)
+            {
+                double sum = 0.0;
+                for (double pos = phase; pos < nl - 1; pos += period)
+                {
+                    const int i = (int) pos;
+                    const double f = pos - i;
+                    sum += (double) condLong[(size_t) i] * (1.0 - f) + (double) condLong[(size_t) i + 1] * f;
+                }
+                best = std::max (best, sum / std::max (1.0, (nl - phase) / period));
+            }
+            return best;
+        };
+        const double base = bestBpm / octave;
+        double fine = base, bestAlign = alignLong (base);
+        for (double b = base - 0.15; b <= base + 0.15; b += 0.005)
+            if (const double a = alignLong (b); a > bestAlign)
+            {
+                bestAlign = a;
+                fine = b;
+            }
+        bestBpm = fine * octave;
+    }
 
     // Confidence: periodicity peak prominence x margin over the strongest rival reading.
     const double avg = std::accumulate (scores.begin(), scores.end(), 0.0) / (double) scores.size();

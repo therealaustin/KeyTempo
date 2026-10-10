@@ -28,9 +28,11 @@ struct GrooveFit
     double fourOnFloor = 0.0; // 0..1 template strengths
     double backbeat = 0.0;
     double halftime = 0.0;
-    double offbeatHats = 1.0; // 0..1: are 8th offbeats populated? (low = tempo likely 2x too fast)
+    double offbeatHats = 1.0; // 0..1: are 8th offbeats played as well as beats? (low = likely 2x too fast)
     double plausibility = 0.0; // 0..1: best template strength x genre/tempo plausibility
     bool syncopatedKick = false; // a large share of kick hits fall between the beats
+    double gridAlignment = 0.0;  // 0..1: hits land on the 8th-note grid (true tempo) rather
+                                 // than on in-between 16ths (half tempo) or smeared (3:2 errors)
     Feel feel = Feel::Unknown;
 };
 

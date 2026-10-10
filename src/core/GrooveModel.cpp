@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#ifdef KT_TEMPO_DEBUG
+#include <cstdio>
+#endif
 
 namespace kt
 {
@@ -20,9 +23,12 @@ namespace
         return std::max (floor, v);
     }
 
+    /** Step `step` of a pattern rotated by `rotation` 8th notes (2 steps each): the
+        downbeat is unknown, and the beat phase may itself be off by an 8th when off-beat
+        hats or bass are louder than the kick. */
     float at (const std::array<float, 16>& p, int step, int rotation)
     {
-        return p[(size_t) (((step + 4 * rotation) % 16 + 16) % 16)];
+        return p[(size_t) (((step + 2 * rotation) % 16 + 16) % 16)];
     }
 
     float mean4 (const std::array<float, 16>& p, int a, int b, int c, int d, int r)
@@ -71,6 +77,11 @@ FoldedBar foldBar (const BandEnvelopes& bands, double periodFrames, double phase
     // A snare or clap is a noise burst that lights up the mids *and* the top end, while
     // synth stabs, plucks and basses are mostly mid-only and hats are top-only. The
     // geometric mean of the two bands keeps the snare and rejects both impostors.
+#ifdef KT_TEMPO_DEBUG
+    std::fprintf (stderr, "                M:");
+    for (auto v : bar.snare) std::fprintf (stderr, "%4.1f", v);
+    std::fprintf (stderr, "\n");
+#endif
     if (bar.hasSnare && bar.hasHats)
     {
         double total = 0.0;
@@ -132,8 +143,23 @@ GrooveFit fitGroove (const FoldedBar& bar, double bpm, Genre genre)
 {
     GrooveFit fit;
 
+    // The beat phase may be off by an 8th when off-beat hats or bass outweigh the kick.
+    // Kicks sit on beats far more than on offbeats in every style here, so let the kick
+    // decide the 8th shift, then match templates at whole-beat rotations of that grid.
+    int shift = 0;
+    if (bar.hasKick)
+    {
+        double onBeat = 0.0, onOff = 0.0;
+        for (size_t st = 0; st < 16; st += 4)
+        {
+            onBeat += bar.kick[st];
+            onOff += bar.kick[st + 2];
+        }
+        shift = onOff > 2.2 * onBeat ? 1 : 0;
+    }
+
     // Template matching, each at its own best bar rotation (the downbeat is unknown).
-    for (int r = 0; r < 4; ++r)
+    for (int r = shift; r < 8; r += 2)
     {
         if (bar.hasKick)
         {
@@ -166,12 +192,14 @@ GrooveFit fitGroove (const FoldedBar& bar, double bpm, Genre genre)
         fit.syncopatedKick = off / 12.0 > 0.55 * (onBeats / 4.0) * 0.5 && off > 0.3 * (onBeats + off);
     }
 
-    // If hats exist but nothing hits the 8th offbeats, every "8th" of the real groove is
-    // landing on a beat: this tempo is probably twice too fast.
+    // Too-fast check: at the true tempo the hats (or whatever plays between the kicks)
+    // use the 8th offbeats; at twice the tempo those 8ths land on beats and the offbeats
+    // go quiet. Measured on the kick-corrected grid. Without hats, compare all bands
+    // symmetrically (beats vs. offbeats).
     if (bar.hasHats)
     {
         double best = 0.0;
-        for (int r = 0; r < 4; ++r)
+        for (int r = shift; r < 8; r += 2)
         {
             const double off = mean4 (bar.hats, 2, 6, 10, 14, r);
             const double on = mean4 (bar.hats, 0, 4, 8, 12, r);
@@ -179,15 +207,53 @@ GrooveFit fitGroove (const FoldedBar& bar, double bpm, Genre genre)
         }
         fit.offbeatHats = std::clamp (best / 0.45, 0.0, 1.0);
     }
+    else if (bar.hasKick || bar.hasSnare)
+    {
+        double on = 0.0, off = 0.0;
+        for (size_t st = 0; st < 16; st += 2)
+        {
+            const double v = (bar.hasKick ? bar.kick[st] : 0.0f) + (bar.hasSnare ? bar.snare[st] : 0.0f);
+            ((st / 2) % 2 == 0 ? on : off) += v;
+        }
+        fit.offbeatHats = std::clamp (std::min (on, off) / std::max (1.0e-9, std::max (on, off)) / 0.3, 0.0, 1.0);
+    }
+
+    // Grid alignment: share of each band's onset energy on even 16th steps (the 8th-note
+    // grid) minus the share on odd steps. Independent of bar rotation.
+    {
+        auto alignment = [] (const std::array<float, 16>& p)
+        {
+            double even = 0.0, odd = 0.0;
+            for (size_t st = 0; st < 16; ++st)
+                (st % 2 == 0 ? even : odd) += p[st];
+            return (even - odd) / std::max (1.0e-9, even + odd);
+        };
+        double sum = 0.0, weights = 0.0;
+        if (bar.hasKick)  { sum += 0.4 * alignment (bar.kick);  weights += 0.4; }
+        if (bar.hasSnare) { sum += 0.3 * alignment (bar.snare); weights += 0.3; }
+        if (bar.hasHats)  { sum += 0.3 * alignment (bar.hats);  weights += 0.3; }
+        fit.gridAlignment = weights > 0.0 ? std::clamp (sum / weights, 0.0, 1.0) : 0.0;
+    }
 
     const double fof = fit.fourOnFloor * feelPlausibility (Feel::FourOnTheFloor, bpm, genre);
     const double bb = fit.backbeat * feelPlausibility (Feel::Backbeat, bpm, genre) * (0.4 + 0.6 * fit.offbeatHats);
     const double ht = fit.halftime * feelPlausibility (Feel::Halftime, bpm, genre) * fit.offbeatHats;
 
-    fit.plausibility = std::max ({ fof, bb, ht });
-    if (fit.plausibility < 0.2)
-        fit.feel = Feel::Unknown;
-    else if (fof >= bb && fof >= ht)
+    // Generic evidence for rhythms the templates don't capture (busy breaks, rolling
+    // DnB with rides on beat 3, syncopated house): everything sits on the 8th grid and
+    // the 8th offbeats are used (so it isn't twice too fast).
+    const double gridFit = std::clamp ((fit.gridAlignment - 0.12) / 0.35, 0.0, 1.0);
+    // Requires a structured kick: at the right tempo the kick pattern repeats bar after bar
+    // and folds into sharp peaks; at a 3:2 reading it drifts across the bar and smears.
+    double kickStructure = 0.5;
+    if (bar.hasKick)
+        kickStructure = std::clamp ((*std::max_element (bar.kick.begin(), bar.kick.end()) - 1.8) / 1.2, 0.0, 1.0);
+    const double generic = 0.6 * gridFit * fit.offbeatHats * kickStructure * feelPlausibility (Feel::Backbeat, bpm, genre);
+
+    fit.plausibility = std::max ({ fof, bb, ht, generic });
+    if (std::max ({ fof, bb, ht }) < 0.2)
+        fit.feel = (generic >= 0.2 && fit.syncopatedKick && bpm >= 150.0) ? Feel::Breakbeat : Feel::Unknown;
+    else if (fof >= 0.6 * std::max (bb, ht)) // claps on 2 & 4 over a four-on-the-floor kick is still four-on-the-floor
         fit.feel = Feel::FourOnTheFloor;
     else if (ht > bb)
         fit.feel = Feel::Halftime;

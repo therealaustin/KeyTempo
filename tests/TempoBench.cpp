@@ -4,6 +4,9 @@
 //   kt_tempo_bench --genre         Also run with the matching genre preset
 //   kt_tempo_bench --only DnB      Only styles whose name contains the text
 //   kt_tempo_bench --wav DIR       Also write each clip as a WAV (for listening)
+//   kt_tempo_bench --files LIST    Real tracks instead: each line "path<TAB>sampleRate<TAB>trueBpm<TAB>name",
+//                                  path = raw mono float32 audio, e.g. from
+//                                  ffmpeg -i song.mp3 -ac 1 -ar 44100 -f f32le song.f32
 //   kt_tempo_bench --min N         Exit with an error if fewer than N clips are correct (CI)
 //   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
@@ -39,7 +42,7 @@ Genre presetFor (Style s)
             return Genre::HouseTechno;
         case Style::Trance:
             return Genre::Trance;
-        case Style::DnbTwoStep: case Style::DnbAmen: case Style::Neurofunk: case Style::Liquid: case Style::DnbHalftime:
+        case Style::DnbTwoStep: case Style::DnbAmen: case Style::Neurofunk: case Style::Liquid: case Style::DnbHalftime: case Style::DnbRolling:
             return Genre::DrumAndBass;
         case Style::Dubstep: case Style::Trap:
             return Genre::DubstepTrap;
@@ -178,8 +181,107 @@ int runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* w
 }
 } // namespace
 
+struct RealTrack
+{
+    std::string path, name;
+    double sampleRate = 44100.0, bpm = 0.0;
+};
+
+/** Real-track mode: same scoring as the synthetic benchmark. */
+int runFiles (const char* listPath, Genre genre)
+{
+    std::vector<RealTrack> tracks;
+    std::ifstream list (listPath);
+    for (std::string line; std::getline (list, line);)
+    {
+        if (line.empty() || line[0] == '#')
+            continue;
+        RealTrack t;
+        size_t a = line.find ('\t'), b = line.find ('\t', a + 1), c = line.find ('\t', b + 1);
+        if (a == std::string::npos || b == std::string::npos)
+            continue;
+        t.path = line.substr (0, a);
+        t.sampleRate = std::atof (line.substr (a + 1, b - a - 1).c_str());
+        t.bpm = std::atof (line.substr (b + 1, c - b - 1).c_str());
+        t.name = c != std::string::npos ? line.substr (c + 1) : t.path;
+        tracks.push_back (t);
+    }
+
+    struct Out { double got = 0, stable = 0, firstCorrect = -1; float conf = 0; std::string feel; };
+    std::vector<Out> outs (tracks.size());
+    std::atomic<size_t> next { 0 };
+    std::vector<std::thread> pool;
+    for (unsigned w = 0; w < std::max (1u, std::thread::hardware_concurrency()); ++w)
+        pool.emplace_back ([&]
+        {
+            for (size_t i; (i = next++) < tracks.size();)
+            {
+                const auto& t = tracks[i];
+                std::ifstream f (t.path, std::ios::binary | std::ios::ate);
+                std::vector<float> audio ((size_t) f.tellg() / sizeof (float));
+                f.seekg (0);
+                f.read ((char*) audio.data(), (std::streamsize) (audio.size() * sizeof (float)));
+
+                AnalysisEngine engine;
+                engine.prepare (t.sampleRate);
+                engine.setGenre (genre);
+                const auto interval = (size_t) (0.4 * t.sampleRate);
+                size_t since = 0, updates = 0, good = 0;
+                for (size_t p = 0; p < audio.size(); p += 512)
+                {
+                    const int n = (int) std::min<size_t> (512, audio.size() - p);
+                    engine.push (audio.data() + p, n);
+                    if ((since += (size_t) n) >= interval)
+                    {
+                        engine.update();
+                        since = 0;
+                        const auto& r = engine.getTempo();
+                        const bool ok = r.valid && std::abs (r.bpm - t.bpm) <= 0.25;
+                        if (ok && outs[i].firstCorrect < 0)
+                            outs[i].firstCorrect = (double) p / t.sampleRate;
+                        if (p > (size_t) (30.0 * t.sampleRate)) // after the first 30 s
+                        {
+                            ++updates;
+                            good += ok;
+                        }
+                    }
+                }
+                const auto& r = engine.getTempo();
+                outs[i] = { r.valid ? r.bpm : 0.0, updates ? (double) good / updates : 0.0, outs[i].firstCorrect, r.confidence,
+                            r.valid ? feelName (r.feel) : "-" };
+            }
+        });
+    for (auto& th : pool)
+        th.join();
+
+    std::printf ("\n=== Real tracks, %s ===\n%-32s %7s %8s %6s %8s %8s  %-6s %s\n", genreName (genre), "track", "true", "got", "conf",
+                 "stable", "locks@", "class", "feel");
+    int ok = 0;
+    for (size_t i = 0; i < tracks.size(); ++i)
+    {
+        const auto& o = outs[i];
+        const bool good = std::abs (o.got - tracks[i].bpm) <= 0.25;
+        ok += good;
+        std::printf ("%-32.32s %7.2f %8.2f %6.2f %7.0f%% %7.0fs  %-6s %s\n", tracks[i].name.c_str(), tracks[i].bpm, o.got, o.conf,
+                     o.stable * 100, o.firstCorrect, good ? "ok" : classify (o.got, tracks[i].bpm), o.feel.c_str());
+    }
+    std::printf ("TOTAL: %d/%zu correct at end\n", ok, tracks.size());
+    return ok;
+}
+
 int main (int argc, char** argv)
 {
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::strcmp (argv[i], "--files") == 0)
+        {
+            Genre g = Genre::Auto;
+            for (int j = 1; j + 1 < argc; ++j)
+                if (std::strcmp (argv[j], "--genre-index") == 0)
+                    g = (Genre) std::atoi (argv[j + 1]);
+            runFiles (argv[i + 1], g);
+            return 0;
+        }
+
     bool preset = false;
     const char* filter = nullptr;
     const char* wavDir = nullptr;

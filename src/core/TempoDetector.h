@@ -44,7 +44,9 @@ struct TempoResult
 class TempoDetector
 {
 public:
-    void prepare (double sampleRate, double windowSeconds = 12.0);
+    /** `windowSeconds`: what the groove / octave decision looks at. `precisionSeconds`:
+        how far back the final phase-lock looks (longer = more precise BPM). */
+    void prepare (double sampleRate, double windowSeconds = 12.0, double precisionSeconds = 30.0);
     void reset();
 
     void push (const float* mono, int numSamples);
@@ -69,7 +71,7 @@ private:
     std::vector<float> env, lowEnv, accentEnv; // onset strength rings: full band, below ~110 Hz, lightly compressed
     std::vector<float> midEnv, highEnv;        // snare band (~200 Hz-4 kHz), hat band (> ~6 kHz)
     std::vector<uint8_t> active;    // whether each envelope frame had signal
-    int envWrite = 0, envCount = 0;
+    int envWrite = 0, envCount = 0, windowFrames = 0;
     double kickEma = 0.0, kickPeak = 0.0; // slow trackers of kick-band onset level
 };
 } // namespace kt

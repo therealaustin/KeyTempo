@@ -155,14 +155,21 @@ void AnalysisEngine::updateTempoMemory (const TempoResult& raw)
     // breakdowns, intros and fills can't overturn it, yet a real tempo change still wins.
     const double decay = std::exp (-updateIntervalSeconds / tempoMemorySeconds);
     for (auto& h : hypotheses)
+    {
         h.weight *= decay;
+        h.fitAcc *= decay;
+        for (auto& fw : h.feelWeight)
+            fw *= decay;
+    }
 
     if (raw.valid)
     {
         // Readings backed by a recognisable groove (drums playing) count far more than
         // readings from pads, vocals or a breakdown.
         // Windows without a kick (breakdowns, build-up snare rolls) count very little.
-        const double w = (0.1 + raw.confidence) * (0.08 + raw.grooveFit) * (0.1 + 0.9 * raw.drumPresence);
+        // Squared groove fit: a window whose rhythm clearly fits a groove counts several
+        // times more than one with sparse or ambiguous rhythm (a lone clap, pads, a riff).
+        const double w = (0.1 + raw.confidence) * (0.02 + raw.grooveFit * raw.grooveFit) * (0.1 + 0.9 * raw.drumPresence);
 
         Hypothesis* match = nullptr;
         for (auto& h : hypotheses)
@@ -170,19 +177,40 @@ void AnalysisEngine::updateTempoMemory (const TempoResult& raw)
                 match = &h;
         if (match == nullptr)
         {
-            hypotheses.push_back ({ raw.bpm, 0.0, 0.0, Feel::Unknown, 0.0f });
+            hypotheses.push_back ({ raw.bpm, 0.0, 0.0, 0.0, {}, {}, Feel::Unknown, 0.0f });
             match = &hypotheses.back();
         }
 
-        // Precise tempo: confidence-weighted average of readings that agree (~20 s of
-        // readings), which averages away per-window jitter.
-        const double avgDecay = std::exp (-updateIntervalSeconds / 20.0);
-        match->bpmWeight = match->bpmWeight * avgDecay + w;
-        match->bpm += (raw.bpm - match->bpm) * (w / match->bpmWeight);
+        // Precise tempo: weighted median of the last ~40 s of readings that agree. Robust
+        // to the odd off reading from an intro, riser or fill, unlike an average.
+        match->recent.emplace_back (raw.bpm, w);
+        if (match->recent.size() > 100)
+            match->recent.erase (match->recent.begin());
+        auto sorted = match->recent;
+        std::sort (sorted.begin(), sorted.end());
+        double half = 0.0;
+        for (auto& r : sorted)
+            half += r.second;
+        half *= 0.5;
+        for (auto& r : sorted)
+            if ((half -= r.second) <= 0.0)
+            {
+                match->bpm = r.first;
+                break;
+            }
         match->weight += w;
+        match->fitAcc += w * raw.grooveFit;
         if (raw.feel != Feel::Unknown)
         {
-            match->feel = raw.feel;
+            auto& fw = match->feelWeight[(size_t) raw.feel];
+            fw += w;
+            // Label with the feel that has the most evidence over the track, not the
+            // latest window (an outro or breakdown shouldn't relabel a track).
+            size_t bestFeel = 1;
+            for (size_t f = 1; f < match->feelWeight.size(); ++f)
+                if (match->feelWeight[f] > match->feelWeight[bestFeel])
+                    bestFeel = f;
+            match->feel = (Feel) bestFeel;
             match->grooveFit = raw.grooveFit;
         }
         lastRaw = raw;
@@ -211,6 +239,18 @@ void AnalysisEngine::updateTempoMemory (const TempoResult& raw)
 
     // Hysteresis: a challenger must clearly out-weigh what is on screen.
     const Hypothesis* shown = (current != nullptr && best->weight < 1.3 * current->weight) ? current : best;
+
+    // Octave family: 87 and 174 describe the same beat grid. Between them, prefer the one
+    // whose readings fit a groove better (an intro in half-time shouldn't hold the drop
+    // hostage), once it has a fair share of the evidence.
+    auto avgFit = [] (const Hypothesis& h) { return h.weight > 1.0e-9 ? h.fitAcc / h.weight : 0.0; };
+    for (auto& h : hypotheses)
+    {
+        const double ratio = h.bpm / shown->bpm;
+        const bool octave = std::abs (ratio - 2.0) < 0.03 || std::abs (ratio - 0.5) < 0.008;
+        if (octave && h.weight > 0.35 * shown->weight && avgFit (h) > avgFit (*shown) + 0.05)
+            shown = &h;
+    }
 
     // Strongest other reading that isn't just the same tempo.
     const Hypothesis* alternate = nullptr;

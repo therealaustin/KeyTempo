@@ -86,8 +86,11 @@ All analysis lives in `src/core/` — plain C++ with no JUCE dependency, so it i
    live (four-on-the-floor 112–152, backbeat with snare on 2 & 4 up to ~186, half-time
    dubstep/trap 128–160). At half the true tempo a DnB snare lands on 8th-note offbeats,
    which no template accepts. At double tempo the hats leave the offbeats empty. Either way
-   the wrong reading loses.
-4. *Precision:* the winner is phase-locked to the onsets across the window (~0.01 BPM).
+   the wrong reading loses. For busy grooves no template fits (rolling DnB with a ride on
+   beat 3), *grid alignment* decides: at the true tempo the kick, snare and hats land on the
+   8th-note grid. At a 3:2 reading they smear, and at half tempo they fall on in-between 16ths.
+4. *Precision:* the winner is phase-locked to the onsets over the last 30 s (~0.01 BPM), and the
+   shown value is the weighted median of recent readings, so a stray reading can't move it.
 5. *Memory:* every 0.4 s reading adds evidence to its tempo, weighted by confidence, groove
    fit and how much kick is present compared with the track's drops. So intros, breakdowns
    and build-up snare rolls barely count, and the reading firms up over the track (90 s memory).
@@ -130,14 +133,19 @@ build-core/kt_tempo_bench --wav out/      # write the clips to listen to
 | v0.1 (Auto) | 39 / 63 | 56% |
 | v0.2 (Auto) | 63 / 63 | 99% |
 | v0.2 (Auto, hard) | 63 / 63 | 98% |
+| v0.3 (Auto, hard, +3 rolling-DnB 3:2 clips) | 66 / 66 | 99% |
 
-Synthetic clips only prove the logic works. Real tracks are the real test:
-`kt_tool analyze --genre auto song.mp3` prints what the plug-in would show.
+Synthetic clips only prove the logic works; real tracks are the real test. On ten DnB and
+trance tracks that other analyzers get wrong (Beatport lists every DnB one at half tempo),
+KeyTempo is 10 / 10 in Auto, within 0.02 BPM. See [tests/REAL_TRACKS.md](tests/REAL_TRACKS.md).
+`kt_tool analyze --trace --genre auto "song [174].mp3"` prints what the plug-in would show
+over time (a `[174]` in the file name scores it).
 
 ## Known limitations
 
 - Halftime DnB (snare only on beat 3 at 170–175) reads as 85–87 in Auto, the same as a hip-hop
-  backbeat. Choose the Drum & Bass genre to read it at 170–175.
+  backbeat. A DnB track with a half-time intro shows 85–87 until the full-tempo drums come in.
+  Choose the Drum & Bass genre to read it at 170–175 from the start.
 - Tracks with no drums at all fall back to plain periodicity and are less reliable.
   Confidence drops to show it.
 - Tempo changes within a track (DJ mixes, live recordings) are followed, but slowly, because

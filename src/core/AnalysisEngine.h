@@ -3,6 +3,8 @@
 #include "KeyDetector.h"
 #include "TempoDetector.h"
 
+#include <array>
+#include <utility>
 #include <vector>
 
 namespace kt
@@ -54,6 +56,9 @@ private:
     struct Hypothesis
     {
         double bpm, weight, bpmWeight;
+        double fitAcc; // weight-weighted groove fit, decays like `weight`
+        std::vector<std::pair<double, double>> recent; // last readings (bpm, weight) for the median
+        std::array<double, 5> feelWeight {};          // evidence per Feel, to label the dominant one
         Feel feel;
         float grooveFit;
     };

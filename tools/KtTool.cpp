@@ -1,6 +1,7 @@
 // Developer tool for KeyTempo.
 //
-//   kt_tool analyze [--genre NAME] <audio file> [more files...]
+//   kt_tool analyze [--trace] [--genre NAME] <audio file> [more files...]
+//       Put the true tempo in the file name as "[174]" to score it.
 //       Runs the analysis engine over whole files (WAV/AIFF/FLAC/MP3/Ogg) and prints
 //       tempo, key and time signature — handy for checking accuracy on real music.
 //
@@ -61,7 +62,7 @@ kt::Genre parseGenre (const juce::String& name)
     return kt::Genre::Auto;
 }
 
-int analyse (const juce::StringArray& files, kt::Genre genre)
+int analyse (const juce::StringArray& files, kt::Genre genre, bool trace)
 {
     for (const auto& path : files)
     {
@@ -77,6 +78,11 @@ int analyse (const juce::StringArray& files, kt::Genre genre)
         engine.prepare (sr);
         engine.setGenre (genre);
         const auto updateEvery = (size_t) (0.4 * sr);
+        int updates = 0, shownUpdates = 0, correctUpdates = 0, lastTraceBucket = -1;
+        // Optional ground truth in the file name: "... [174].mp3"
+        double expected = 0.0;
+        if (const auto tag = path.fromLastOccurrenceOf ("[", false, false).upToFirstOccurrenceOf ("]", false, false); tag.containsOnly ("0123456789."))
+            expected = tag.getDoubleValue();
         size_t since = 0;
         for (size_t i = 0; i < mono.size(); i += 512)
         {
@@ -86,6 +92,21 @@ int analyse (const juce::StringArray& files, kt::Genre genre)
             {
                 engine.update();
                 since = 0;
+                const auto& t = engine.getTempo();
+                const auto& r = engine.getRawTempo();
+                ++updates;
+                if (t.valid)
+                {
+                    ++shownUpdates;
+                    if (expected > 0 && std::abs (t.bpm - expected) <= 0.25)
+                        ++correctUpdates;
+                }
+                if (trace && (int) (i / sr) / 5 != lastTraceBucket)
+                {
+                    lastTraceBucket = (int) (i / sr) / 5;
+                    std::printf ("  %5.0fs  window %7.2f %-18s fit %.2f drums %.2f | shown %7.2f (conf %.2f)\n", i / sr,
+                                 r.valid ? r.bpm : 0.0, kt::feelName (r.feel), r.grooveFit, r.drumPresence, t.valid ? t.bpm : 0.0, t.confidence);
+                }
             }
         }
         engine.update();
@@ -101,6 +122,10 @@ int analyse (const juce::StringArray& files, kt::Genre genre)
                 tempoText << juce::String::formatted (", also fits %.2f", t.alternateBpm);
             tempoText << ")";
         }
+        if (expected > 0)
+            tempoText << juce::String::formatted ("  [expected %.2f: %s; correct %.0f%% of the time shown]", expected,
+                                                  std::abs (t.bpm - expected) <= 0.25 ? "OK" : "WRONG",
+                                                  100.0 * correctUpdates / std::max (1, updates));
         std::printf ("%s  [%s]\n  tempo  %s\n  key    %s\n  meter  %s\n", path.toRawUTF8(), kt::genreName (genre), tempoText.toRawUTF8(),
                      k.valid ? (utf8 (kt::theory::keyName (k.key)) + " / rel. " + utf8 (kt::theory::keyName (kt::theory::relativeKey (k.key)))
                                 + " / " + utf8 (kt::theory::camelot (k.key))).toRawUTF8() : "-",
@@ -170,15 +195,18 @@ int main (int argc, char* argv[])
     if (args.size() >= 2 && args[0] == "analyze")
     {
         auto genre = kt::Genre::Auto;
+        bool trace = false;
         juce::StringArray files;
         for (int i = 1; i < args.size(); ++i)
         {
             if (args[i] == "--genre" && i + 1 < args.size())
                 genre = parseGenre (args[++i]);
+            else if (args[i] == "--trace")
+                trace = true;
             else
                 files.add (args[i]);
         }
-        return analyse (files, genre);
+        return analyse (files, genre, trace);
     }
     if (args.size() >= 2 && args[0] == "demo")
     {
@@ -198,6 +226,6 @@ int main (int argc, char* argv[])
     if (args.size() >= 2 && args[0] == "snapshot")
         return snapshot (args[1], args.size() > 2 ? args[2] : juce::String());
 
-    std::printf ("usage:\n  kt_tool analyze [--genre auto|house|trance|drum|dubstep|hip|pop] <audio files...>\n  kt_tool demo <out.wav>\n  kt_tool snapshot <out.png> [audio file]\n");
+    std::printf ("usage:\n  kt_tool analyze [--trace] [--genre auto|house|trance|drum|dubstep|hip|pop] <audio files...>\n  kt_tool demo <out.wav>\n  kt_tool snapshot <out.png> [audio file]\n");
     return 1;
 }
