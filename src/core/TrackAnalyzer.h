@@ -3,6 +3,7 @@
 #include "Genre.h"
 
 #include <cstddef>
+#include <memory>
 
 namespace kt
 {
@@ -47,6 +48,24 @@ struct TrackAnalysisOptions
     double updateIntervalSeconds = 1.2;
 };
 
-/** Analyses a whole mono track. Thread-safe (no shared state); call from any thread. */
+/** Streaming whole-track analysis: push the track's mono samples in any block size,
+    then call finish() once. Memory is ~1 MB per minute of audio (onset envelopes only,
+    no samples kept), so a decoder can stream straight into it. One instance per track;
+    instances are independent, so many can run on different threads. */
+class TrackAnalyzer
+{
+public:
+    explicit TrackAnalyzer (double sampleRate, const TrackAnalysisOptions& options = {});
+    ~TrackAnalyzer();
+
+    void push (const float* mono, int numSamples);
+    TrackAnalysis finish();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
+/** Convenience: analyses a whole mono track held in memory. */
 TrackAnalysis analyseTrack (const float* mono, size_t numSamples, double sampleRate, const TrackAnalysisOptions& options = {});
 } // namespace kt

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <cmath>
 #include <vector>
 #ifdef KT_GRID_DEBUG
@@ -15,7 +16,8 @@ namespace kt
 {
 namespace
 {
-    /** Full-band and kick-band onset envelopes for the whole track (~5.8 ms frames at 44.1 kHz). */
+    /** Full-band, kick-band and snare-band onset envelopes plus a coarse spectrum per
+        frame (~5.8 ms frames at 44.1 kHz), built incrementally as audio streams in. */
     struct Envelopes
     {
         std::vector<float> full, low, snare;
@@ -23,41 +25,68 @@ namespace
         double rate = 0.0;
     };
 
-    Envelopes onsetEnvelopes (const float* x, size_t n, double sr)
+    class EnvelopeBuilder
     {
-        Envelopes e;
-        const int size = Fft::nextPowerOfTwo ((int) std::lround (sr * 0.023));
-        const int hop = size / 4;
-        e.rate = sr / hop;
-        if (n < (size_t) size)
-            return e;
-
-        Fft fft (size);
-        const int maxBin = std::min (size / 2, (int) (11000.0 * size / sr));
-        const int lowBin = std::max (2, (int) std::lround (150.0 * size / sr));
-        const int snareLo = (int) std::lround (1500.0 * size / sr), snareHi = std::min (size / 2, (int) std::lround (8000.0 * size / sr));
-        std::vector<float> mags, prevLog ((size_t) size / 2 + 1, 0.0f), prevLow ((size_t) size / 2 + 1, 0.0f);
-
-        // 24 log-spaced bands from 80 Hz to 5 kHz
-        std::array<int, 25> bandEdges {};
-        for (int b = 0; b <= 24; ++b)
-            bandEdges[(size_t) b] = std::clamp ((int) std::lround (80.0 * std::pow (5000.0 / 80.0, b / 24.0) * size / sr), 1, size / 2);
-        const float scale = 2.0f / (float) size;
-
-        const size_t frames = (n - (size_t) size) / (size_t) hop + 1;
-        e.full.reserve (frames);
-        e.low.reserve (frames);
-        e.snare.reserve (frames);
-        e.bands.reserve (frames);
-        for (size_t f = 0; f < frames; ++f)
+    public:
+        explicit EnvelopeBuilder (double sampleRate)
+            : sr (sampleRate),
+              size (Fft::nextPowerOfTwo ((int) std::lround (sampleRate * 0.023))),
+              hop (size / 4),
+              fft (size)
         {
-            fft.magnitudeSpectrum (x + f * (size_t) hop, mags);
+            e.rate = sr / hop;
+            maxBin = std::min (size / 2, (int) (11000.0 * size / sr));
+            lowBin = std::max (2, (int) std::lround (150.0 * size / sr));
+            snareLo = (int) std::lround (1500.0 * size / sr);
+            snareHi = std::min (size / 2, (int) std::lround (8000.0 * size / sr));
+            for (int b = 0; b <= 24; ++b)
+                bandEdges[(size_t) b] = std::clamp ((int) std::lround (80.0 * std::pow (5000.0 / 80.0, b / 24.0) * size / sr), 1, size / 2);
+            prevLog.assign ((size_t) size / 2 + 1, 0.0f);
+            prevLow.assign ((size_t) size / 2 + 1, 0.0f);
+            ring.assign ((size_t) size, 0.0f);
+            frame.assign ((size_t) size, 0.0f);
+            untilFrame = size; // first frame once a full window has arrived
+        }
+
+        int windowSize() const noexcept { return size; }
+
+        void push (const float* x, int n)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                ring[(size_t) write] = x[i];
+                write = (write + 1) % size;
+                if (--untilFrame == 0)
+                {
+                    processFrame();
+                    untilFrame = hop;
+                }
+            }
+        }
+
+        Envelopes finish()
+        {
+            detrend (e.full);
+            detrend (e.low);
+            detrend (e.snare);
+            return std::move (e);
+        }
+
+    private:
+        void processFrame()
+        {
+            for (int i = 0; i < size; ++i)
+                frame[(size_t) i] = ring[(size_t) ((write + i) % size)];
+            fft.magnitudeSpectrum (frame.data(), mags);
+
+            const float scale = 2.0f / (float) size;
             float flux = 0.0f, low = 0.0f, snare = 0.0f;
+            const bool first = e.full.empty();
             for (int k = 1; k <= maxBin; ++k)
             {
                 const float m = mags[(size_t) k] * scale;
                 const float l = std::log1p (1000.0f * m);
-                if (f > 0)
+                if (! first)
                 {
                     const float d = std::max (0.0f, l - prevLog[(size_t) k]);
                     flux += d;
@@ -86,8 +115,8 @@ namespace
             e.bands.push_back (bands);
         }
 
-        // Remove the local mean (~0.25 s) so loudness changes don't bias the grid.
-        auto detrend = [&] (std::vector<float>& v)
+        /** Remove the local mean (~0.25 s) so loudness changes don't bias the grid. */
+        void detrend (std::vector<float>& v) const
         {
             const int half = std::max (1, (int) (e.rate * 0.125));
             const int m = (int) v.size();
@@ -101,12 +130,17 @@ namespace
                 out[(size_t) i] = (float) std::max (0.0, v[(size_t) i] - (prefix[(size_t) b] - prefix[(size_t) a]) / (b - a));
             }
             v.swap (out);
-        };
-        detrend (e.full);
-        detrend (e.low);
-        detrend (e.snare);
-        return e;
-    }
+        }
+
+        double sr;
+        int size, hop;
+        Fft fft;
+        int maxBin = 0, lowBin = 0, snareLo = 0, snareHi = 0;
+        std::array<int, 25> bandEdges {};
+        std::vector<float> prevLog, prevLow, ring, frame, mags;
+        int write = 0, untilFrame = 0;
+        Envelopes e;
+    };
 
     double interpolate (const std::vector<float>& v, double pos)
     {
@@ -118,34 +152,75 @@ namespace
     }
 } // namespace
 
-TrackAnalysis analyseTrack (const float* mono, size_t numSamples, double sampleRate, const TrackAnalysisOptions& options)
+struct TrackAnalyzer::Impl
 {
-    TrackAnalysis out;
-    out.durationSeconds = sampleRate > 0.0 ? (double) numSamples / sampleRate : 0.0;
-    if (mono == nullptr || numSamples == 0 || sampleRate <= 0.0)
-        return out;
-
-    // ---- Tempo, key and meter: stream the whole track through the same engine the
-    // plug-in uses, so the librarian and the plug-in always agree.
-    AnalysisEngine engine;
-    engine.prepare (sampleRate);
-    engine.setUpdateInterval (options.updateIntervalSeconds);
-    engine.setGenre (options.genre);
-
-    const auto interval = (size_t) std::max (1.0, options.updateIntervalSeconds * sampleRate);
-    const size_t block = 4096;
-    size_t since = 0;
-    for (size_t p = 0; p < numSamples; p += block)
+    Impl (double sampleRate, const TrackAnalysisOptions& o)
+        : sr (sampleRate), options (o), envelopes (sampleRate),
+          interval ((size_t) std::max (1.0, o.updateIntervalSeconds * sampleRate))
     {
-        const int n = (int) std::min (block, numSamples - p);
-        engine.push (mono + p, n);
-        if ((since += (size_t) n) >= interval)
+        engine.prepare (sampleRate);
+        engine.setUpdateInterval (o.updateIntervalSeconds);
+        engine.setGenre (o.genre);
+    }
+
+    void push (const float* mono, int n)
+    {
+        total += (size_t) n;
+        envelopes.push (mono, n);
+        // Feed the engine in update-sized pieces so it re-estimates on schedule.
+        while (n > 0)
         {
-            engine.update();
-            since = 0;
+            const int chunk = (int) std::min ((size_t) n, interval - since);
+            engine.push (mono, chunk);
+            mono += chunk;
+            n -= chunk;
+            if ((since += (size_t) chunk) >= interval)
+            {
+                engine.update();
+                since = 0;
+            }
         }
     }
+
+    TrackAnalysis finish();
+
+    double sr;
+    TrackAnalysisOptions options;
+    AnalysisEngine engine;
+    EnvelopeBuilder envelopes;
+    size_t interval, since = 0, total = 0;
+};
+
+TrackAnalyzer::TrackAnalyzer (double sampleRate, const TrackAnalysisOptions& options)
+    : impl (std::make_unique<Impl> (sampleRate > 0.0 ? sampleRate : 44100.0, options)) {}
+TrackAnalyzer::~TrackAnalyzer() = default;
+
+void TrackAnalyzer::push (const float* mono, int numSamples)
+{
+    if (mono != nullptr && numSamples > 0)
+        impl->push (mono, numSamples);
+}
+
+TrackAnalysis TrackAnalyzer::finish() { return impl->finish(); }
+
+TrackAnalysis analyseTrack (const float* mono, size_t numSamples, double sampleRate, const TrackAnalysisOptions& options)
+{
+    if (mono == nullptr || numSamples == 0 || sampleRate <= 0.0)
+        return {};
+    TrackAnalyzer analyzer (sampleRate, options);
+    for (size_t p = 0; p < numSamples; p += 65536)
+        analyzer.push (mono + p, (int) std::min<size_t> (65536, numSamples - p));
+    return analyzer.finish();
+}
+
+TrackAnalysis TrackAnalyzer::Impl::finish()
+{
+    TrackAnalysis out;
+    out.durationSeconds = (double) total / sr;
+    if (total == 0)
+        return out;
     engine.update();
+    const double sampleRate = sr;
 
     const auto& t = engine.getTempo();
     const auto& k = engine.getKey();
@@ -170,7 +245,7 @@ TrackAnalysis analyseTrack (const float* mono, size_t numSamples, double sampleR
 
     // ---- Beat grid: phase-lock a pulse train at the final BPM to the whole track, then
     // pick which beat of the bar is "1" from where the kick hits hardest.
-    const auto env = onsetEnvelopes (mono, numSamples, sampleRate);
+    const auto env = envelopes.finish();
     if (env.full.size() < 16)
         return out;
 
@@ -282,7 +357,7 @@ TrackAnalysis analyseTrack (const float* mono, size_t numSamples, double sampleR
 
     // Envelope frame i covers samples [i*hop, i*hop+size); onsets register at the frame
     // whose window first contains them, so frame time ~= start + half the window.
-    const double frameOffset = 0.5 * (double) Fft::nextPowerOfTwo ((int) std::lround (sampleRate * 0.023)) / sampleRate;
+    const double frameOffset = 0.5 * (double) envelopes.windowSize() / sampleRate;
     const double beatSeconds = 60.0 / out.bpm;
     double first = (bestPhase / env.rate) + frameOffset + downbeat * beatSeconds;
     const double barSeconds = beatSeconds * beatsPerBar;
