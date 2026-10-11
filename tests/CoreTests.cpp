@@ -2,6 +2,8 @@
 // Build: cmake -B build -DKT_BUILD_PLUGIN=OFF && cmake --build build && ctest --test-dir build
 
 #include "AnalysisEngine.h"
+#include "TrackAnalyzer.h"
+#include "bench/GrooveLab.h"
 #include "MusicTheory.h"
 
 #include <cmath>
@@ -226,6 +228,28 @@ static void testMeter (const char* label, double stepsPerMinute, const std::stri
     CHECK (r.meter.valid && sig == expectedSig, "expected %s\n", expectedSig);
 }
 
+static void testTrackAnalyzer()
+{
+    std::printf ("Whole-track analysis (beat grid)\n");
+    using groove::Style;
+    const std::pair<Style, double> clips[] = { { Style::DnbTwoStep, 174.0 }, { Style::House, 124.0 }, { Style::Trance, 138.0 },
+                                               { Style::Dubstep, 140.0 }, { Style::BoomBap, 90.0 } };
+    for (const auto& [style, bpm] : clips)
+    {
+        const auto clip = groove::make (style, bpm, 7);
+        const auto r = analyseTrack (clip.audio.data(), clip.audio.size(), clip.sampleRate);
+        // Every generated clip starts on a downbeat at t = 0, so the grid's first downbeat
+        // must sit on a bar line (within 10 ms).
+        const double bar = 240.0 / bpm;
+        const double err = std::fmod (r.firstBeatSeconds + bar / 2, bar) - bar / 2;
+        std::printf ("  %-14s %6.1f -> %7.2f BPM, first downbeat %.3f s (%+.1f ms from a bar line)\n",
+                     groove::styleName (style), bpm, r.bpm, r.firstBeatSeconds, err * 1000);
+        CHECK (r.valid && std::abs (r.bpm - bpm) < 0.1, "expected %.1f BPM\n", bpm);
+        CHECK (std::abs (err) < 0.010, "downbeat off by %.1f ms\n", err * 1000);
+        CHECK (r.engineVersion == analysisVersion, "engine version\n");
+    }
+}
+
 static void testSilence()
 {
     std::printf ("Silence\n");
@@ -281,6 +305,7 @@ int main()
     // A minor tuned to A = 432 Hz
     testKey ("A minor @ A=432", makeKey (9, true), { triad (57, true), triad (62, true), triad (64, false), triad (57, true) }, 44100.0, 432.0);
 
+    testTrackAnalyzer();
     testSilence();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

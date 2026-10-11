@@ -29,6 +29,8 @@ public:
     void setTempoRange (double minBpm, double maxBpm);
     void setGenre (Genre g) { genre = g; const auto r = tempoRangeFor (g); setTempoRange (r.lo, r.hi); }
     void setKeyMemorySeconds (double seconds);
+    /** How often update() will be called, in seconds of audio (default 0.4). */
+    void setUpdateInterval (double seconds) { updateIntervalSeconds = seconds > 0.05 ? seconds : 0.05; }
 
     void push (const float* mono, int numSamples);
 
@@ -64,7 +66,7 @@ private:
     };
     std::vector<Hypothesis> hypotheses;
     double tempoMemorySeconds = 90.0;
-    static constexpr double updateIntervalSeconds = 0.4; // how often the host calls update()
+    double updateIntervalSeconds = 0.4; // how often the host calls update()
     void updateTempoMemory (const TempoResult& raw);
 
     MeterResult meter;

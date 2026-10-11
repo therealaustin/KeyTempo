@@ -41,8 +41,10 @@ add_library(kt_core STATIC
     src/core/GrooveModel.cpp
     src/core/KeyDetector.cpp
     src/core/MusicTheory.cpp
-    src/core/AnalysisEngine.cpp)
-target_include_directories(kt_core PUBLIC src/core)
+    src/core/AnalysisEngine.cpp
+    src/core/TrackAnalyzer.cpp)
+add_library(kt::core ALIAS kt_core)
+target_include_directories(kt_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 if(MSVC)
     target_compile_options(kt_core PRIVATE /W4)
 else()
@@ -52,6 +54,7 @@ endif()
 if(KT_BUILD_TESTS)
     enable_testing()
     add_executable(kt_core_tests tests/CoreTests.cpp)
+    target_include_directories(kt_core_tests PRIVATE tests)
     target_link_libraries(kt_core_tests PRIVATE kt_core)
     add_test(NAME kt_core_tests COMMAND kt_core_tests)
 

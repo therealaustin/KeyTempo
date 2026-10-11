@@ -113,6 +113,22 @@ tonic the bass keeps returning to — that's what separates a minor key from its
 - **½× / 1× / 2×:** show the tempo halved or doubled, if you count it differently.
 - **Hold** freezes the readings. **Reset** forgets everything heard so far (use it between tracks).
 
+## Using the analysis engine in other projects
+
+`src/core` has no JUCE dependency. Pull it in with CMake and link `kt::core`:
+
+```cmake
+set(KT_BUILD_PLUGIN OFF CACHE BOOL "" FORCE)
+set(KT_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(keytempo GIT_REPOSITORY https://github.com/therealaustin/KeyTempo.git GIT_TAG <commit>)
+FetchContent_MakeAvailable(keytempo)
+target_link_libraries(my_app PRIVATE kt::core)
+```
+
+For whole files use `kt::analyseTrack()` (`TrackAnalyzer.h`): BPM with confidence and
+alternate, beat grid (first downbeat), key, time signature and an engine version for
+re-scan decisions. Thread-safe, ~2% of real time on one core.
+
 ## Testing tempo accuracy
 
 `tests/bench/GrooveLab.h` synthesises 40-bar tracks (intro, main, breakdown, drop) in 15 styles:
