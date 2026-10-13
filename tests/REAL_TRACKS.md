@@ -13,10 +13,12 @@ build-core/kt_tempo_bench --files tracks.tsv --genre-index 3 # Drum & Bass prese
 Each run scores two things: the plug-in engine (the table below), and the whole-track analyser
 that TrueGrid uses. For the second it prints the BPM error to 0.001 BPM, the grid's drift by the
 end of the track, and, when the manifest has an optional 5th column with the time (s) of any true
-downbeat, how far the grid is from that downbeat and whether beat 1 is right:
+downbeat, how far the grid is from that downbeat and whether beat 1 is right. An optional 6th
+column with the key ("Am", "F#m", Camelot "8A" or Open Key "1m") adds a key table that also
+counts near misses (relative, fifth or parallel key):
 
 ```bash
-printf "song.f32\t44100\t174\tsong name\t0.512\n" >> tracks.tsv
+printf "song.f32\t44100\t174\tsong name\t0.512\tF#m\n" >> tracks.tsv
 ```
 
 To use hand-checked rekordbox grids as the answer key, export the collection as XML and build
