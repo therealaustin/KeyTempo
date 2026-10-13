@@ -19,6 +19,14 @@ downbeat, how far the grid is from that downbeat and whether beat 1 is right:
 printf "song.f32\t44100\t174\tsong name\t0.512\n" >> tracks.tsv
 ```
 
+To use hand-checked rekordbox grids as the answer key, export the collection as XML and build
+the manifest from a playlist of tracks whose grids you have checked:
+
+```bash
+python3 tests/rekordbox_tracks.py rekordbox.xml ~/kt-real --playlist "Grid checked"
+build-core/kt_tempo_bench --files ~/kt-real/tracks.tsv
+```
+
 The true BPM was measured by folding each whole track's onset envelope at candidate tempos in
 0.005 BPM steps (`precise.py`-style check). For DnB, Beatport lists exactly half of it.
 
