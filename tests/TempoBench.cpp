@@ -8,7 +8,8 @@
 //                                  path = raw mono float32 audio, e.g. from
 //                                  ffmpeg -i song.mp3 -ac 1 -ar 44100 -f f32le song.f32
 //                                  An optional 5th column gives the time (s) of any true downbeat;
-//                                  the whole-track grid is then scored against it.
+//                                  the whole-track grid is then scored against it. An optional 6th
+//                                  column gives the key ("Am", "F#m", "8A", "1m"), scored too.
 //   kt_tempo_bench --min N         Exit with an error if fewer than N clips are correct (CI)
 //   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
@@ -19,10 +20,12 @@
 // A result is correct within ±0.25 BPM. Halftime DnB accepts 87 or 174 in Auto.
 
 #include "AnalysisEngine.h"
+#include "MusicTheory.h"
 #include "TrackAnalyzer.h"
 #include "bench/GrooveLab.h"
 
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -190,7 +193,59 @@ struct RealTrack
     std::string path, name;
     double sampleRate = 44100.0, bpm = 0.0;
     double downbeat = -1.0; // seconds of any true downbeat (beat 1), < 0 if unknown
+    int key = -1;           // 0..23 (MusicTheory.h), -1 if unknown
 };
+
+/** Parses "Am", "F#m", "E♭ minor", "Gb", Camelot "8A" or Open Key "1m". -1 if not a key. */
+int parseKey (std::string text)
+{
+    while (! text.empty() && std::isspace ((unsigned char) text.back())) text.pop_back();
+    while (! text.empty() && std::isspace ((unsigned char) text.front())) text.erase (0, 1);
+    if (text.empty())
+        return -1;
+
+    if (std::isdigit ((unsigned char) text[0]))
+    {
+        const int number = std::atoi (text.c_str());
+        const char mode = (char) std::toupper ((unsigned char) text.back());
+        if (number < 1 || number > 12)
+            return -1;
+        std::string camelot;
+        if (mode == 'A' || mode == 'B')
+            camelot = std::to_string (number) + mode;
+        else if (mode == 'M' || mode == 'D') // Open Key: 1d = C major = 8B
+            camelot = std::to_string ((number + 6) % 12 + 1) + (mode == 'M' ? 'A' : 'B');
+        for (int k = 0; k < theory::numKeys; ++k)
+            if (theory::camelot (k) == camelot)
+                return k;
+        return -1;
+    }
+
+    static const int letters[7] = { 9, 11, 0, 2, 4, 5, 7 }; // A..G
+    const char letter = (char) std::toupper ((unsigned char) text[0]);
+    if (letter < 'A' || letter > 'G')
+        return -1;
+    int pc = letters[letter - 'A'];
+    std::string rest = text.substr (1);
+    if (rest.rfind ("#", 0) == 0) { ++pc; rest.erase (0, 1); }
+    else if (rest.rfind ("\xe2\x99\xaf", 0) == 0) { ++pc; rest.erase (0, 3); }   // ♯
+    else if (rest.rfind ("\xe2\x99\xad", 0) == 0) { --pc; rest.erase (0, 3); }   // ♭
+    else if (rest.rfind ("b", 0) == 0) { --pc; rest.erase (0, 1); }
+    while (! rest.empty() && rest[0] == ' ') rest.erase (0, 1);
+    const bool minor = ! rest.empty() && rest[0] == 'm' && rest.rfind ("maj", 0) != 0;
+    return theory::makeKey (pc, minor);
+}
+
+const char* classifyKey (int got, int want)
+{
+    if (got < 0) return "none";
+    if (got == want) return "ok";
+    if (got == theory::relativeKey (want)) return "relative";
+    if (theory::tonic (got) == theory::tonic (want)) return "parallel";
+    const int interval = (theory::tonic (got) - theory::tonic (want) + 12) % 12;
+    if (theory::isMinor (got) == theory::isMinor (want) && (interval == 5 || interval == 7)) return "fifth";
+    return "other";
+}
 
 /** Whole-track (TrackAnalyzer) scores against the truth. Drift and grid offsets are only
     meaningful when the BPM is in the right family, so they are NaN otherwise. */
@@ -200,6 +255,7 @@ struct GridScore
     double driftMs = std::nan ("");    // grid position error at the end of the track
     double beatOffsetMs = std::nan (""); // grid vs. the true downbeat, to the nearest beat
     int downbeatShift = -1;              // beats between our beat 1 and the true one (0 = right)
+    int key = -1;
 };
 
 GridScore scoreGrid (const TrackAnalysis& a, const RealTrack& t)
@@ -208,6 +264,7 @@ GridScore scoreGrid (const TrackAnalysis& a, const RealTrack& t)
     if (! a.valid)
         return g;
     g.bpm = a.bpm;
+    g.key = a.key;
     g.bpmError = a.bpm - t.bpm;
     if (std::abs (a.bpm / t.bpm - 1.0) > 0.012)
         return g;
@@ -255,6 +312,8 @@ int runFiles (const char* listPath, Genre genre)
         t.name = cols.size() > 3 ? cols[3] : t.path;
         if (cols.size() > 4 && ! cols[4].empty())
             t.downbeat = std::atof (cols[4].c_str());
+        if (cols.size() > 5)
+            t.key = parseKey (cols[5]);
         tracks.push_back (t);
     }
 
@@ -361,6 +420,24 @@ int runFiles (const char* listPath, Genre genre)
     if (haveDownbeat > 0)
         std::printf (", grid within 20 ms %d/%d, downbeat %d/%d", offsetOk, haveDownbeat, downbeatOk, haveDownbeat);
     std::printf ("\n");
+
+    // Key, for tracks that list one (6th column).
+    int haveKey = 0, keyOk = 0, keyRelated = 0;
+    for (size_t i = 0; i < tracks.size(); ++i)
+    {
+        if (tracks[i].key < 0)
+            continue;
+        if (haveKey++ == 0)
+            std::printf ("\n=== Key (whole-track analyser) ===\n%-32s %-10s %-10s %s\n", "track", "true", "got", "class");
+        const int got = outs[i].grid.key;
+        const char* c = classifyKey (got, tracks[i].key);
+        keyOk += got == tracks[i].key;
+        keyRelated += std::strcmp (c, "relative") == 0 || std::strcmp (c, "fifth") == 0 || std::strcmp (c, "parallel") == 0;
+        std::printf ("%-32.32s %-10s %-10s %s\n", tracks[i].name.c_str(), theory::camelot (tracks[i].key).c_str(),
+                     got >= 0 ? theory::camelot (got).c_str() : "-", c);
+    }
+    if (haveKey > 0)
+        std::printf ("TOTAL: %d/%d keys correct, %d more off by a relative, fifth or parallel key\n", keyOk, haveKey, keyRelated);
     return ok;
 }
 
