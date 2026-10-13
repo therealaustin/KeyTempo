@@ -7,6 +7,8 @@
 //   kt_tempo_bench --files LIST    Real tracks instead: each line "path<TAB>sampleRate<TAB>trueBpm<TAB>name",
 //                                  path = raw mono float32 audio, e.g. from
 //                                  ffmpeg -i song.mp3 -ac 1 -ar 44100 -f f32le song.f32
+//                                  An optional 5th column gives the time (s) of any true downbeat;
+//                                  the whole-track grid is then scored against it.
 //   kt_tempo_bench --min N         Exit with an error if fewer than N clips are correct (CI)
 //   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
@@ -17,9 +19,11 @@
 // A result is correct within ±0.25 BPM. Halftime DnB accepts 87 or 174 in Auto.
 
 #include "AnalysisEngine.h"
+#include "TrackAnalyzer.h"
 #include "bench/GrooveLab.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -185,9 +189,46 @@ struct RealTrack
 {
     std::string path, name;
     double sampleRate = 44100.0, bpm = 0.0;
+    double downbeat = -1.0; // seconds of any true downbeat (beat 1), < 0 if unknown
 };
 
-/** Real-track mode: same scoring as the synthetic benchmark. */
+/** Whole-track (TrackAnalyzer) scores against the truth. Drift and grid offsets are only
+    meaningful when the BPM is in the right family, so they are NaN otherwise. */
+struct GridScore
+{
+    double bpm = 0, bpmError = 0;
+    double driftMs = std::nan ("");    // grid position error at the end of the track
+    double beatOffsetMs = std::nan (""); // grid vs. the true downbeat, to the nearest beat
+    int downbeatShift = -1;              // beats between our beat 1 and the true one (0 = right)
+};
+
+GridScore scoreGrid (const TrackAnalysis& a, const RealTrack& t)
+{
+    GridScore g;
+    if (! a.valid)
+        return g;
+    g.bpm = a.bpm;
+    g.bpmError = a.bpm - t.bpm;
+    if (std::abs (a.bpm / t.bpm - 1.0) > 0.012)
+        return g;
+
+    // Beat k of the true grid is at downbeat + k * 60 / bpm; ours drifts by (true / got - 1)
+    // of the elapsed time.
+    g.driftMs = 1000.0 * a.durationSeconds * (t.bpm / a.bpm - 1.0);
+    if (t.downbeat < 0)
+        return g;
+
+    const double period = 60.0 / a.bpm;
+    const double beats = (t.downbeat - a.firstBeatSeconds) / period;
+    const double k = std::round (beats);
+    g.beatOffsetMs = (beats - k) * period * 1000.0;
+    const int n = std::max (1, a.numerator);
+    g.downbeatShift = (int) (((long long) k % n + n) % n);
+    return g;
+}
+
+/** Real-track mode: the plug-in engine (same scoring as the synthetic benchmark) and the
+    whole-track analyser TrueGrid uses. */
 int runFiles (const char* listPath, Genre genre)
 {
     std::vector<RealTrack> tracks;
@@ -196,18 +237,28 @@ int runFiles (const char* listPath, Genre genre)
     {
         if (line.empty() || line[0] == '#')
             continue;
-        RealTrack t;
-        size_t a = line.find ('\t'), b = line.find ('\t', a + 1), c = line.find ('\t', b + 1);
-        if (a == std::string::npos || b == std::string::npos)
+        std::vector<std::string> cols;
+        for (size_t from = 0;;)
+        {
+            const size_t tab = line.find ('\t', from);
+            cols.push_back (line.substr (from, tab - from));
+            if (tab == std::string::npos)
+                break;
+            from = tab + 1;
+        }
+        if (cols.size() < 3)
             continue;
-        t.path = line.substr (0, a);
-        t.sampleRate = std::atof (line.substr (a + 1, b - a - 1).c_str());
-        t.bpm = std::atof (line.substr (b + 1, c - b - 1).c_str());
-        t.name = c != std::string::npos ? line.substr (c + 1) : t.path;
+        RealTrack t;
+        t.path = cols[0];
+        t.sampleRate = std::atof (cols[1].c_str());
+        t.bpm = std::atof (cols[2].c_str());
+        t.name = cols.size() > 3 ? cols[3] : t.path;
+        if (cols.size() > 4 && ! cols[4].empty())
+            t.downbeat = std::atof (cols[4].c_str());
         tracks.push_back (t);
     }
 
-    struct Out { double got = 0, stable = 0, firstCorrect = -1; float conf = 0; std::string feel; };
+    struct Out { double got = 0, stable = 0, firstCorrect = -1; float conf = 0; std::string feel; GridScore grid; };
     std::vector<Out> outs (tracks.size());
     std::atomic<size_t> next { 0 };
     std::vector<std::thread> pool;
@@ -247,15 +298,18 @@ int runFiles (const char* listPath, Genre genre)
                     }
                 }
                 const auto& r = engine.getTempo();
+                TrackAnalysisOptions options;
+                options.genre = genre;
                 outs[i] = { r.valid ? r.bpm : 0.0, updates ? (double) good / updates : 0.0, outs[i].firstCorrect, r.confidence,
-                            r.valid ? feelName (r.feel) : "-" };
+                            r.valid ? feelName (r.feel) : "-",
+                            scoreGrid (analyseTrack (audio.data(), audio.size(), t.sampleRate, options), t) };
             }
         });
     for (auto& th : pool)
         th.join();
 
-    std::printf ("\n=== Real tracks, %s ===\n%-32s %7s %8s %6s %8s %8s  %-6s %s\n", genreName (genre), "track", "true", "got", "conf",
-                 "stable", "locks@", "class", "feel");
+    std::printf ("\n=== Real tracks, %s: plug-in engine ===\n%-32s %7s %8s %6s %8s %8s  %-6s %s\n", genreName (genre), "track", "true",
+                 "got", "conf", "stable", "locks@", "class", "feel");
     int ok = 0;
     for (size_t i = 0; i < tracks.size(); ++i)
     {
@@ -266,6 +320,47 @@ int runFiles (const char* listPath, Genre genre)
                      o.stable * 100, o.firstCorrect, good ? "ok" : classify (o.got, tracks[i].bpm), o.feel.c_str());
     }
     std::printf ("TOTAL: %d/%zu correct at end\n", ok, tracks.size());
+
+    // Whole-track analyser. "drift" = how far the constant grid is off by the end of the
+    // track; "offset" = grid vs. the listed downbeat; "db" = our beat 1 vs. the true one.
+    std::printf ("\n=== Real tracks, %s: whole-track analyser (TrueGrid) ===\n%-32s %7s %8s %8s %8s %8s %4s  %s\n", genreName (genre),
+                 "track", "true", "got", "error", "drift", "offset", "db", "class");
+    int gridOk = 0, haveDownbeat = 0, offsetOk = 0, downbeatOk = 0, inFamily = 0;
+    double absErrSum = 0, worstErr = 0, absDriftSum = 0;
+    for (size_t i = 0; i < tracks.size(); ++i)
+    {
+        const auto& g = outs[i].grid;
+        const bool good = std::abs (g.bpmError) <= 0.25 && g.bpm > 0;
+        gridOk += good;
+        char drift[16] = "-", offset[16] = "-", db[8] = "-";
+        if (! std::isnan (g.driftMs))
+        {
+            ++inFamily;
+            absErrSum += std::abs (g.bpmError);
+            worstErr = std::max (worstErr, std::abs (g.bpmError));
+            absDriftSum += std::abs (g.driftMs);
+            std::snprintf (drift, sizeof (drift), "%+.0fms", g.driftMs);
+        }
+        if (tracks[i].downbeat >= 0)
+        {
+            ++haveDownbeat;
+            if (! std::isnan (g.beatOffsetMs))
+            {
+                std::snprintf (offset, sizeof (offset), "%+.0fms", g.beatOffsetMs);
+                std::snprintf (db, sizeof (db), g.downbeatShift == 0 ? "ok" : "+%d", g.downbeatShift);
+                offsetOk += std::abs (g.beatOffsetMs) <= 20.0;
+                downbeatOk += g.downbeatShift == 0 && std::abs (g.beatOffsetMs) <= 20.0;
+            }
+        }
+        std::printf ("%-32.32s %7.2f %8.3f %+8.3f %8s %8s %4s  %s\n", tracks[i].name.c_str(), tracks[i].bpm, g.bpm, g.bpmError, drift,
+                     offset, db, good ? "ok" : classify (g.bpm, tracks[i].bpm));
+    }
+    std::printf ("TOTAL: %d/%zu correct", gridOk, tracks.size());
+    if (inFamily > 0)
+        std::printf (", mean |error| %.3f BPM (worst %.3f), mean |drift| %.0f ms", absErrSum / inFamily, worstErr, absDriftSum / inFamily);
+    if (haveDownbeat > 0)
+        std::printf (", grid within 20 ms %d/%d, downbeat %d/%d", offsetOk, haveDownbeat, downbeatOk, haveDownbeat);
+    std::printf ("\n");
     return ok;
 }
 
