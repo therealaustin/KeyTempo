@@ -1,20 +1,36 @@
 name: Build
 
+# Changes that only touch docs skip CI (path filters don't apply to tags).
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A new push to a PR cancels its running build. Running builds on main and tags always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +49,7 @@ jobs:
             generator: Visual Studio 17 2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -49,7 +65,7 @@ jobs:
         run: brew install ninja
 
       - name: Cache fetched dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
@@ -67,10 +83,11 @@ jobs:
         if: runner.os == 'Linux'
         run: build/kt_tempo_bench --hard --min 64
 
+      # Pinned so a new pluginval release can't turn CI red without a code change.
       - name: Download pluginval
         shell: bash
         run: |
-          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/${{ matrix.pluginval }}"
+          curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v1.0.4/${{ matrix.pluginval }}"
           unzip -o pluginval.zip -d pluginval
 
       - name: Validate VST3 (pluginval)
@@ -98,7 +115,7 @@ jobs:
           rm -f libKeyTempo_SharedCode.a KeyTempo_SharedCode.lib
           cmake -E tar cf "$GITHUB_WORKSPACE/KeyTempo-${{ matrix.name }}.zip" --format=zip -- *
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: KeyTempo-${{ matrix.name }}
           path: KeyTempo-${{ matrix.name }}.zip
@@ -107,10 +124,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

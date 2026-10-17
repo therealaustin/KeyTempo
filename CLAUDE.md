@@ -29,7 +29,7 @@ Other options:
 - `-DKT_GRID_DEBUG` prints downbeat scoring from `TrackAnalyzer.cpp`.
 
 CI (`.github/workflows/build.yml`) builds on Windows, macOS and Linux, runs the tests and benchmark, and
-validates the plug-in with pluginval and clap-validator.
+validates the plug-in with pluginval (pinned version) and, on macOS, auval. clap-validator is not run in CI.
 
 ## Rules for tempo changes
 
