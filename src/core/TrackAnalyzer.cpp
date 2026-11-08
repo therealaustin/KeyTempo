@@ -252,14 +252,18 @@ TrackAnalysis TrackAnalyzer::Impl::finish()
     const double period = 60.0 * env.rate / out.bpm;
 
     // Phase: kick-led, because off-beat hats and basslines are often louder in the full
-    // band than the kick (trance), which would put the grid half a beat off.
+    // band than the kick (trance), which would put the grid half a beat off. Broken beats
+    // (amen, neurofunk, half-time DnB) are the opposite case: most of their kicks fall on
+    // off-beat 8ths while the snares and the full band mark the beat, so a strong kick
+    // weight pulls the grid half a beat late there. Those feels keep only a light kick cue.
+    const bool brokenBeat = out.feel == Feel::Breakbeat || out.feel == Feel::Halftime;
     double kickMean = 0.0, fullMean = 0.0;
     for (size_t i = 0; i < env.full.size(); ++i)
     {
         kickMean += env.low[i];
         fullMean += env.full[i];
     }
-    const double kickWeight = kickMean > 1.0e-12 ? 1.5 * fullMean / kickMean : 0.0;
+    const double kickWeight = kickMean > 1.0e-12 ? (brokenBeat ? 0.5 : 1.5) * fullMean / kickMean : 0.0;
 
     double bestPhase = 0.0, bestScore = -1.0;
     for (double phase = 0.0; phase < period; phase += 0.25)

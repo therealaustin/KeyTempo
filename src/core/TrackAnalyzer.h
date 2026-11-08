@@ -8,7 +8,7 @@
 namespace kt
 {
 /** Bump whenever analysis results can change, so libraries know what to re-scan. */
-inline constexpr int analysisVersion = 3;
+inline constexpr int analysisVersion = 4;
 
 /** Whole-track analysis result, for libraries and batch tools. */
 struct TrackAnalysis
