@@ -40,7 +40,7 @@ jobs:
             pluginval: pluginval_Linux.zip
             generator: Ninja
           - name: macOS
-            os: macos-14
+            os: macos-15
             pluginval: pluginval_macOS.zip
             generator: Ninja
           - name: Windows
