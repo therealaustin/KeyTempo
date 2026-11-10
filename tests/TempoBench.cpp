@@ -212,7 +212,7 @@ std::pair<double, int> nearestGridBeat (const TrackAnalysis& a, double t)
         if (std::abs (bt - t) < std::abs (bestTime - t))
         {
             bestTime = bt;
-            const int bpb = std::max (1, a.numerator == 3 ? 3 : 4);
+            const int bpb = g.numerator == 3 && g.denominator == 4 ? 3 : 4;
             bestBeat = (int) (((g.beatInBar - 1 + (long long) n) % bpb + bpb) % bpb) + 1;
         }
     }
@@ -276,14 +276,50 @@ int runSegments()
         std::printf ("\n%s: %.3f BPM (range %.3f-%.3f), %zu tempo segments, key %s, %zu key segments\n", c.name.c_str(), a.bpm, a.bpmMin,
                      a.bpmMax, a.tempoSegments.size(), a.key >= 0 ? theory::camelot (a.key).c_str() : "-", a.keySegments.size());
         for (auto& g : a.tempoSegments)
-            std::printf ("   tempo %8.3f s %8.3f BPM  beat %d  conf %.2f%s\n", g.startSeconds, g.bpm, g.beatInBar, g.confidence, g.ramp ? "  ramp" : "");
+            std::printf ("   tempo %8.3f s %8.3f BPM  beat %d  %d/%d%s  conf %.2f%s\n", g.startSeconds, g.bpm, g.beatInBar, g.numerator, g.denominator,
+                         g.pulseBpm > 0 ? (" pulse " + std::to_string (g.pulseBpm).substr (0, 6)).c_str() : "", g.confidence, g.ramp ? "  ramp" : "");
         for (auto& k : a.keySegments)
             std::printf ("   key   %8.3f s  %s  conf %.2f\n", k.startSeconds, theory::camelot (k.key).c_str(), k.confidence);
+
+        // Meter sections: a segment on each change's downbeat, with the right signature.
+        // Tempo checks below then see the sections between tempo changes only.
+        std::vector<TempoSegment> tempoOnly;
+        for (size_t g = 0; g < a.tempoSegments.size(); ++g)
+            if (g == 0 || a.tempoSegments[g].bpm != a.tempoSegments[g - 1].bpm || a.tempoSegments[g].ramp)
+                tempoOnly.push_back (a.tempoSegments[g]);
+        if (! c.meters.empty())
+        {
+            std::vector<TempoSegment> changes;
+            for (size_t g = 0; g < a.tempoSegments.size(); ++g)
+            {
+                const auto& s = a.tempoSegments[g];
+                if (g == 0 || s.numerator != a.tempoSegments[g - 1].numerator || s.denominator != a.tempoSegments[g - 1].denominator
+                    || s.pulseBpm != a.tempoSegments[g - 1].pulseBpm)
+                    changes.push_back (s);
+            }
+            if (changes.size() != c.meters.size())
+                problems.push_back (std::to_string (changes.size()) + " meter sections, want " + std::to_string (c.meters.size()));
+            else
+                for (size_t m = 0; m < changes.size(); ++m)
+                {
+                    const auto& want = c.meters[m];
+                    const double bar = want.numerator * 60.0 / changes[m].bpm;
+                    const double wantPulse = want.pulse != 1.0 ? changes[m].bpm * want.pulse : 0.0;
+                    if (changes[m].numerator != want.numerator || changes[m].denominator != want.denominator
+                        || std::abs (changes[m].pulseBpm - wantPulse) > 0.1)
+                        problems.push_back ("meter section " + std::to_string (m + 1) + " is " + std::to_string (changes[m].numerator) + "/"
+                                            + std::to_string (changes[m].denominator) + " pulse " + std::to_string (changes[m].pulseBpm));
+                    if (m > 0 && std::abs (changes[m].startSeconds - want.start) > 0.02)
+                        problems.push_back ("meter section " + std::to_string (m + 1) + " starts at " + std::to_string (changes[m].startSeconds)
+                                            + ", want " + std::to_string (want.start));
+                    (void) bar;
+                }
+        }
 
         // Steady sections: one non-ramp segment each, starting within a bar, BPM within
         // 0.05, the grid on the true beats in the middle of the section, beat 1 right.
         std::vector<TempoSegment> steady;
-        for (auto& g : a.tempoSegments)
+        for (auto& g : tempoOnly)
             if (! g.ramp)
                 steady.push_back (g);
         if (steady.size() != c.tempo.size())

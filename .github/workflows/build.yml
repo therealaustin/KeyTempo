@@ -83,6 +83,10 @@ jobs:
         if: runner.os == 'Linux'
         run: build/kt_tempo_bench --hard --min 64
 
+      - name: Segment benchmark (no false splits; tempo, key and meter changes found)
+        if: runner.os == 'Linux'
+        run: build/kt_tempo_bench --segments --hard
+
       # Pinned so a new pluginval release can't turn CI red without a code change.
       - name: Download pluginval
         shell: bash

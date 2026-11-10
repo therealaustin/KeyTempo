@@ -22,6 +22,10 @@ struct TempoSegment
     float confidence = 0.0f;   // 0..1
     int beatInBar = 1;         // which beat of the bar startSeconds is (1 = downbeat)
     bool ramp = false;         // part of a gradual tempo change (markers every few bars)
+    int numerator = 4, denominator = 4; // this section's time signature
+    /** The felt pulse when it differs from the grid's beat (a metric modulation, e.g. a
+        section of dotted-8th pulses at 4/3 of the tempo while the bars stay), else 0. */
+    double pulseBpm = 0.0;
 };
 
 /** A section in one key. */
@@ -55,7 +59,7 @@ struct TrackAnalysis
     // firstBeatSeconds, and bpmMin == bpmMax == bpm. Empty when the tempo is not valid.
     std::vector<TempoSegment> tempoSegments;
     double bpmMin = 0.0, bpmMax = 0.0;
-    bool variableTempo = false;
+    bool variableTempo = false; // the BPM changes (a meter change alone adds a segment, not this)
 
     // Key (0..11 major, 12..23 minor; see MusicTheory.h). When the key changes, the
     // dominant (longest-held) one; keySegments has them all (one for a single-key track,
@@ -65,7 +69,8 @@ struct TrackAnalysis
     float tuningCents = 0.0f;
     std::vector<KeySegment> keySegments;
 
-    // Time signature
+    // Time signature (the dominant one; tempoSegments carry each section's own, and a
+    // meter change starts a new segment on its first downbeat)
     bool meterValid = false;
     int numerator = 4, denominator = 4;
     float meterConfidence = 0.0f;
@@ -81,7 +86,7 @@ struct TrackAnalysisOptions
     double updateIntervalSeconds = 1.2;
     /** Look for tempo and key changes within the track. Off = one segment each. */
     bool detectChanges = true;
-    /** Shortest section, in bars, that counts as a tempo or key change. Shorter
+    /** Shortest section, in bars, that counts as a tempo, key or meter change. Shorter
         differences (fills, breakdowns, a half-time bridge) never split a track. */
     int minSegmentBars = 16;
     /** Grid marker spacing, in bars, while the tempo glides between two sections. */

@@ -364,7 +364,7 @@ struct TrackAnalyzer::Impl
         {
             // The same weighting the engine's tempo memory gives each reading.
             const double w = (0.1 + r.confidence) * (0.02 + r.grooveFit * r.grooveFit) * (0.1 + 0.9 * r.drumPresence);
-            readings.push_back ({ now - 0.5 * std::min (12.0, now), r.bpm, w });
+            readings.push_back ({ now - 0.5 * std::min (12.0, now), r.bpm, w, r.dupleScore, r.tripleScore, r.compoundScore });
         }
     }
 
@@ -390,10 +390,12 @@ struct TrackAnalyzer::Impl
     TrackAnalysis finish();
     void findTempoSegments (TrackAnalysis& out, const Envelopes& env, Feel feel, int beatsPerBar, const GridLock& wholeTrack, double frameOffset);
     void findKeySegments (TrackAnalysis& out, int beatsPerBar);
+    void findMeterSegments (TrackAnalysis& out, const Envelopes& env, double frameOffset);
 
     struct Reading
     {
         double time, bpm, weight;
+        float duple, triple, compound; // the detector's bar grouping and subdivision evidence
     };
 
     double sr;
@@ -490,6 +492,12 @@ TrackAnalysis TrackAnalyzer::Impl::finish()
     out.tempoSegments = { { out.firstBeatSeconds, out.bpm, out.bpmConfidence, 1, false } };
     out.bpmMin = out.bpmMax = out.bpm;
     findTempoSegments (out, env, out.feel, beatsPerBar, lock, frameOffset);
+    for (auto& seg : out.tempoSegments)
+    {
+        seg.numerator = out.numerator;
+        seg.denominator = out.denominator;
+    }
+    findMeterSegments (out, env, frameOffset);
     findKeySegments (out, beatsPerBar);
     return out;
 }
@@ -914,6 +922,289 @@ void TrackAnalyzer::Impl::findTempoSegments (TrackAnalysis& out, const Envelopes
     out.firstBeatSeconds = std::fmod (toSeconds (domDownbeat), bar);
     if (out.firstBeatSeconds < 0.0)
         out.firstBeatSeconds += bar;
+}
+
+// ---- Meter changes ------------------------------------------------------------------
+//
+// Each reading also carries the detector's bar grouping (2 / 4 against 3 beats), its
+// subdivision (straight against triplet) and, through its raw tempo, the felt pulse. A
+// section that holds a different meter or pulse for minSegmentBars, and whose onsets
+// confirm it, starts a new segment on the downbeat where it begins.
+void TrackAnalyzer::Impl::findMeterSegments (TrackAnalysis& out, const Envelopes& env, double frameOffset)
+{
+    if (! options.detectChanges || out.tempoSegments.empty() || readings.size() < 8)
+        return;
+    const double rate = env.rate;
+    const int frames = (int) env.full.size();
+    auto toFrame = [&] (double seconds) { return (seconds - frameOffset) * rate; };
+    auto toSeconds = [&] (double frame) { return frame / rate + frameOffset; };
+    auto segmentAt = [&] (double t)
+    {
+        size_t s = 0;
+        while (s + 1 < out.tempoSegments.size() && out.tempoSegments[s + 1].startSeconds <= t)
+            ++s;
+        return s;
+    };
+
+    // Reading classes: bar grouping (4 or 3), straight or triplet subdivision, and the
+    // pulse against the grid (1, 4:3 or 3:4).
+    struct Point { double time; int grouping; bool compound; int pulse; }; // pulse: 0 = grid, 1 = 4:3, 2 = 3:4
+    auto code = [] (const Point& p) { return p.grouping * 10 + (p.compound ? 5 : 0) + p.pulse; };
+    std::vector<double> weights;
+    for (auto& r : readings)
+        weights.push_back (r.weight);
+    std::sort (weights.begin(), weights.end());
+    const double threshold = 0.2 * weights[weights.size() * 4 / 5];
+    std::vector<Point> pts;
+    for (auto& r : readings)
+    {
+#ifdef KT_SEG_DEBUG
+        std::fprintf (stderr, "meter raw %.1f bpm %.2f w %.3f (threshold %.3f)\n", r.time, r.bpm, r.weight, threshold);
+#endif
+        if (r.weight < threshold)
+            continue;
+        const auto& seg = out.tempoSegments[segmentAt (r.time)];
+        if (seg.ramp)
+            continue;
+        double ratio = r.bpm / seg.bpm;
+        int octave = 0;
+        while (ratio > 1.42)
+        {
+            ratio *= 0.5;
+            ++octave;
+        }
+        while (ratio < 0.707)
+        {
+            ratio *= 2.0;
+            --octave;
+        }
+        Point p { r.time, 4, false, 0 };
+        if (std::abs (ratio - 1.0) < 0.01)
+        {
+            // Bar grouping and subdivision only mean something at the grid's own beat.
+            if (octave == 0)
+            {
+                p.grouping = r.triple > r.duple + 0.08f ? 3 : 4;
+                p.compound = r.compound > 0.08f;
+            }
+        }
+        else if (std::abs (ratio - 4.0 / 3.0) < 0.01)
+            p.pulse = 1;
+        else if (std::abs (ratio - 0.75) < 0.008)
+            p.pulse = 2;
+        else
+            continue;
+        pts.push_back (p);
+#ifdef KT_SEG_DEBUG
+        std::fprintf (stderr, "meter reading %.1f bpm %.2f duple %.2f triple %.2f compound %.2f -> %d\n", r.time, r.bpm, r.duple, r.triple, r.compound, code (p));
+#endif
+    }
+    if (pts.size() < 8)
+        return;
+
+    struct Region { double from, to; Point kind; double bpm = 0.0; double fromFrame = 0.0, toFrame = 0.0; };
+    std::vector<Region> regions;
+    for (size_t i = 0; i < pts.size();)
+    {
+        size_t last = i;
+        int misses = 0;
+        for (size_t j = i + 1; j < pts.size(); ++j)
+        {
+            if (code (pts[j]) == code (pts[i]))
+            {
+                last = j;
+                misses = 0;
+            }
+            else if (++misses > 3)
+                break;
+        }
+        const double bpm = out.tempoSegments[segmentAt (pts[i].time)].bpm;
+        const double minSeconds = 0.85 * options.minSegmentBars * 4 * 60.0 / bpm;
+        if (pts[last].time - pts[i].time + 6.0 >= minSeconds)
+            regions.push_back ({ pts[i].time - 6.0, pts[last].time + 6.0, pts[i], bpm });
+        i = last + 1;
+    }
+
+    // Onset evidence: periodicity of the kick and full band at a lag, over a region.
+    std::vector<float> onset ((size_t) frames);
+    for (int i = 0; i < frames; ++i)
+        onset[(size_t) i] = env.full[(size_t) i] + env.low[(size_t) i];
+    auto acf = [&] (const std::vector<float>& v, double from, double to, double lag)
+    {
+        double sum = 0.0, norm = 0.0;
+        for (int i = std::max (0, (int) from); i + lag + 1 < std::min ((double) frames, to); ++i)
+        {
+            sum += v[(size_t) i] * interpolate (v, i + lag);
+            norm += v[(size_t) i] * v[(size_t) i];
+        }
+        return norm > 1.0e-12 ? sum / norm : 0.0;
+    };
+    auto alignment = [&] (double bpm, double from, double to)
+    {
+        const double period = 60.0 * rate / bpm;
+        double best = 0.0;
+        for (double phase = 0.0; phase < period; phase += 0.5)
+        {
+            double sum = 0.0;
+            int count = 0;
+            for (double pos = from + phase; pos < to - 1; pos += period, ++count)
+                sum += interpolate (onset, pos);
+            if (count > 0)
+                best = std::max (best, sum / count);
+        }
+        return best;
+    };
+    auto pulseRatio = [] (int pulse) { return pulse == 1 ? 4.0 / 3.0 : (pulse == 2 ? 0.75 : 1.0); };
+    // How strongly a region's onsets show its own kind against another kind (> 1 = its own).
+    auto evidenceFor = [&] (const Region& r, const Point& own, const Point& other)
+    {
+        const double period = 60.0 * rate / r.bpm;
+        double ratio = 10.0;
+        if (own.grouping != other.grouping)
+        {
+            // From the kick band: snares and hats on every beat say nothing about the bar.
+            const double g = acf (env.low, r.fromFrame, r.toFrame, own.grouping * period), h = acf (env.low, r.fromFrame, r.toFrame, other.grouping * period);
+            ratio = std::min (ratio, h > 1.0e-9 ? g / h : 10.0);
+        }
+        if (own.compound != other.compound)
+        {
+            const double third = acf (onset, r.fromFrame, r.toFrame, period / 3.0), half = acf (onset, r.fromFrame, r.toFrame, period / 2.0);
+            const double g = own.compound ? third : half, h = own.compound ? half : third;
+            ratio = std::min (ratio, h > 1.0e-9 ? g / h : 10.0);
+        }
+        if (own.pulse != other.pulse)
+        {
+            const double g = alignment (r.bpm * pulseRatio (own.pulse), r.fromFrame, r.toFrame);
+            const double h = alignment (r.bpm * pulseRatio (other.pulse), r.fromFrame, r.toFrame);
+            ratio = std::min (ratio, h > 1.0e-9 ? g / h : 10.0);
+        }
+        return ratio;
+    };
+
+    for (bool changed = true; changed;)
+    {
+        changed = false;
+        for (auto& r : regions)
+        {
+            r.fromFrame = std::max (0.0, toFrame (r.from));
+            r.toFrame = std::min ((double) frames, toFrame (r.to));
+        }
+        for (size_t r = 0; r + 1 < regions.size(); ++r)
+        {
+            auto& a = regions[r];
+            auto& b = regions[r + 1];
+            const bool distinct = code (a.kind) != code (b.kind) && std::abs (a.bpm / b.bpm - 1.0) < 1.0e-9
+                                  && evidenceFor (a, a.kind, b.kind) > 1.1 && evidenceFor (b, b.kind, a.kind) > 1.1;
+#ifdef KT_SEG_DEBUG
+            std::fprintf (stderr, "meter %d (%.0f-%.0f) -> %d (%.0f-%.0f): evidence %.2f %.2f\n", code (a.kind), a.from, a.to, code (b.kind), b.from, b.to,
+                          evidenceFor (a, a.kind, b.kind), evidenceFor (b, b.kind, a.kind));
+#endif
+            if (! distinct)
+            {
+                // Keep the kind with more time behind it.
+                if (b.to - b.from > a.to - a.from)
+                    a.kind = b.kind;
+                a.to = b.to;
+                regions.erase (regions.begin() + (long) r + 1);
+                changed = true;
+                break;
+            }
+        }
+    }
+    if (regions.size() < 2)
+        return;
+
+    auto signature = [] (const Point& k)
+    {
+        if (k.compound)
+            return k.grouping == 3 ? std::pair<int, int> { 9, 8 } : std::pair<int, int> { 6, 8 };
+        return k.grouping == 3 ? std::pair<int, int> { 3, 4 } : std::pair<int, int> { 4, 4 };
+    };
+    auto barBeats = [] (const TempoSegment& s) { return s.numerator == 3 && s.denominator == 4 ? 3 : 4; };
+
+    // Each change goes on the beat where bar lines before it (in the old meter) and after
+    // it (in the new one) land most kicks.
+    const int win = std::max (1, (int) std::lround (0.03 * rate));
+    auto kickAt = [&] (double frame)
+    {
+        double best = 0.0;
+        for (int d = -win; d <= win; ++d)
+            best = std::max (best, interpolate (env.low, frame + d));
+        return best;
+    };
+    std::vector<TempoSegment> segments = out.tempoSegments;
+    auto applyKind = [&] (TempoSegment& s, const Point& k)
+    {
+        const auto sig = signature (k);
+        s.numerator = sig.first;
+        s.denominator = sig.second;
+        s.pulseBpm = k.pulse != 0 ? s.bpm * pulseRatio (k.pulse) : 0.0;
+    };
+    for (auto& s : segments)
+        if (s.startSeconds < regions[1].from + 6.0)
+            applyKind (s, regions[0].kind);
+    for (size_t r = 1; r < regions.size(); ++r)
+    {
+        const auto& a = regions[r - 1];
+        const auto& b = regions[r];
+        const double from = a.to - 12.0, to = b.from + 12.0;
+        size_t si = 0;
+        while (si + 1 < segments.size() && segments[si + 1].startSeconds <= 0.5 * (from + to))
+            ++si;
+        const auto base = segments[si];
+        const double period = 60.0 / base.bpm;
+        const int beatsA = a.kind.grouping == 3 && ! a.kind.compound ? 3 : 4, beatsB = b.kind.grouping == 3 && ! b.kind.compound ? 3 : 4;
+        double best = -1.0, at = -1.0;
+        for (double k = std::ceil ((from - base.startSeconds) / period); base.startSeconds + k * period <= to; k += 1.0)
+        {
+            const double c = base.startSeconds + k * period;
+            double score = 0.0;
+            if (beatsA != beatsB || a.kind.compound != b.kind.compound)
+                for (int bar = 1; bar <= 8; ++bar)
+                    score += kickAt (toFrame (c - bar * beatsA * period)) + kickAt (toFrame (c + (bar - 1) * beatsB * period));
+            if (a.kind.pulse != b.kind.pulse)
+            {
+                // The old pulse up to the change, the new one from it.
+                const double pa = period / pulseRatio (a.kind.pulse), pb = period / pulseRatio (b.kind.pulse);
+                for (int k = 1; k <= 32; ++k)
+                    score += interpolate (onset, toFrame (c - k * pa)) + interpolate (onset, toFrame (c + (k - 1) * pb));
+            }
+            if (score > best)
+            {
+                best = score;
+                at = c;
+            }
+        }
+        if (at < 0.0)
+            continue;
+        TempoSegment seg = base;
+        seg.startSeconds = at;
+        seg.beatInBar = 1;
+        seg.ramp = false;
+        applyKind (seg, b.kind);
+        segments.insert (segments.begin() + (long) si + 1, seg);
+        for (size_t s = si + 2; s < segments.size() && (r + 1 >= regions.size() || segments[s].startSeconds < regions[r + 1].from + 6.0); ++s)
+            applyKind (segments[s], b.kind);
+    }
+
+    // Beat numbers carried through: a meter change starts on a downbeat, every other
+    // segment continues the bar it falls in.
+    for (size_t s = 1; s < segments.size(); ++s)
+    {
+        const auto& prev = segments[s - 1];
+        auto& cur = segments[s];
+        const bool meterChange = cur.numerator != prev.numerator || cur.denominator != prev.denominator || cur.pulseBpm != prev.pulseBpm;
+        if (meterChange && cur.bpm == prev.bpm)
+        {
+            cur.beatInBar = 1;
+            continue;
+        }
+        const auto beats = (long long) std::llround ((cur.startSeconds - prev.startSeconds) * prev.bpm / 60.0);
+        const int bpb = barBeats (prev);
+        cur.beatInBar = (int) (((prev.beatInBar - 1 + beats) % bpb + bpb) % bpb) + 1;
+    }
+    (void) toSeconds;
+    out.tempoSegments = segments;
 }
 
 // ---- Key changes --------------------------------------------------------------------

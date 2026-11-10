@@ -573,6 +573,80 @@ inline Clip warp (const Clip& src, const std::function<double (double)>& bpmAt)
     return out;
 }
 
+/** A plain groove in any meter: kick on beat 1, snare on the other beats, hats on the
+    subdivisions (2 or 3 per beat), a bass note and a chord per bar. `pulse` 4/3 instead
+    plays every hit on dotted 8ths, accented every four (a 4:3 metric modulation). */
+inline Clip makeMeter (double bpm, int beatsPerBar, bool compound, int bars, unsigned seed, double sr = 44100.0, double pulse = 1.0)
+{
+    Clip clip;
+    clip.bpm = bpm;
+    clip.sampleRate = sr;
+    const double beat = 60.0 / bpm, barSec = beat * beatsPerBar;
+    clip.audio.assign ((size_t) ((bars * barSec + 1.0) * sr), 0.0f);
+    std::vector<float> drums (clip.audio.size(), 0.0f), music (clip.audio.size(), 0.0f);
+    Synth d (drums, sr, seed), m (music, sr, seed * 7 + 1);
+    const int key = 45 + (int) (seed % 7);
+    const int prog[4] = { 0, 5, 7, 0 };
+    for (int bar = 0; bar < bars; ++bar)
+    {
+        const double t0 = bar * barSec;
+        const int chord = key + prog[bar % 4];
+        if (pulse == 1.0)
+        {
+            for (int b = 0; b < beatsPerBar; ++b)
+            {
+                const double t = t0 + b * beat;
+                if (b == 0)
+                    d.kick (t, 1.0f);
+                else
+                    d.snare (t, 0.6f);
+                const int sub = compound ? 3 : 2;
+                for (int k = 0; k < sub; ++k)
+                    d.hat (t + k * beat / sub, k == 0 ? 0.8f : 0.5f, 0.015);
+            }
+        }
+        else if (bar == 0)
+        {
+            // Hits every 3/4 beat right through: four of them span three beats.
+            const double step = beat / pulse;
+            for (int k = 0; k * step < bars * barSec - 1.0e-9; ++k)
+            {
+                const double t = k * step;
+                if (k % 4 == 0)
+                    d.kick (t, 1.0f);
+                else
+                    d.snare (t, 0.6f);
+                d.hat (t, 0.7f, 0.015);
+            }
+        }
+        m.saw (t0, beat * 0.9, midiToHz (chord - 12), 1.0f, 0.004, 500.0);
+        for (int iv : { 12, 16, 19 })
+            m.saw (t0, barSec, midiToHz (chord + iv), 0.35f, 0.05, 1800.0, 0.004);
+    }
+    float peak = 1e-9f;
+    for (size_t n = 0; n < clip.audio.size(); ++n)
+    {
+        clip.audio[n] = 0.8f * drums[n] + 0.6f * music[n];
+        peak = std::max (peak, std::abs (clip.audio[n]));
+    }
+    for (auto& v : clip.audio)
+        v = std::tanh (1.2f * v / peak) * 0.8f;
+    return clip;
+}
+
+/** Joins clips end to end, each cut to the given length in seconds. */
+inline Clip spliceSeconds (const std::vector<std::pair<Clip, double>>& parts)
+{
+    Clip out = parts.front().first;
+    out.audio.clear();
+    for (auto& [clip, seconds] : parts)
+    {
+        const auto n = std::min (clip.audio.size(), (size_t) std::llround (seconds * clip.sampleRate));
+        out.audio.insert (out.audio.end(), clip.audio.begin(), clip.audio.begin() + (long) n);
+    }
+    return out;
+}
+
 /** A track whose tempo or key changes, with the true segments. */
 struct VariableCase
 {
@@ -583,6 +657,8 @@ struct VariableCase
     std::function<double (double)> bpmAt;           // true tempo at each beat (for ramp checks)
     std::vector<std::pair<double, int>> keyChanges; // (seconds, semitones up) after the start
     bool checkKey = true;                           // false where resampling moves the pitch
+    struct Meter { double start; int numerator, denominator; double pulse; };
+    std::vector<Meter> meters;                      // when not empty: each section's meter
 };
 
 inline std::vector<VariableCase> variableCases (unsigned seed, bool hard, double sr = 44100.0)
@@ -634,6 +710,30 @@ inline std::vector<VariableCase> variableCases (unsigned seed, bool hard, double
         c.clip = make (Style::House, 124, seed + 4, sr, hard, 80, 56, 1);
         c.tempo = { { 0.0, 124.0 } };
         c.keyChanges = { { 56 * 4 * 60.0 / 124.0, 1 } };
+        cases.push_back (std::move (c));
+    }
+    {
+        // 4/4 for 32 bars, a 32-bar waltz section in 3/4, then 4/4 again, all at 120.
+        VariableCase c;
+        c.name = "Meter 4/4 -> 3/4 -> 4/4";
+        c.clip = spliceSeconds ({ { makeMeter (120, 4, false, 32, seed + 5, sr), 64.0 },
+                                  { makeMeter (120, 3, false, 32, seed + 5, sr), 48.0 },
+                                  { makeMeter (120, 4, false, 32, seed + 5, sr), 64.0 } });
+        c.tempo = { { 0.0, 120.0 } };
+        c.meters = { { 0.0, 4, 4, 1.0 }, { 64.0, 3, 4, 1.0 }, { 112.0, 4, 4, 1.0 } };
+        c.checkKey = false;
+        cases.push_back (std::move (c));
+    }
+    {
+        // 140 in 4/4 for 64 bars, then 32 bars of dotted-8th pulses (felt at 186.67) on the same bars.
+        VariableCase c;
+        c.name = "Metric modulation 4:3";
+        const double bar = 4 * 60.0 / 140.0;
+        c.clip = spliceSeconds ({ { make (Style::Techno, 140, seed + 6, sr, hard, 64), 64 * bar },
+                                  { makeMeter (140, 4, false, 32, seed + 6, sr, 4.0 / 3.0), 32 * bar } });
+        c.tempo = { { 0.0, 140.0 } };
+        c.meters = { { 0.0, 4, 4, 1.0 }, { 64 * bar, 4, 4, 4.0 / 3.0 } };
+        c.checkKey = false;
         cases.push_back (std::move (c));
     }
     return cases;

@@ -22,6 +22,9 @@ cmake --build build-core --parallel
 # Tempo benchmark: 66 synthetic genre tracks (tests/bench/GrooveLab.h). CI gate: --hard --min 64
 build-core/kt_tempo_bench --hard --min 64
 build-core/kt_tempo_bench --only "DnB" --genre 3     # filter by style name, force a genre preset
+# Segments (whole-track analyser): no steady clip may split, and the change clips (tempo jump, ramp,
+# DnB half-time section, key change, 3/4 section, 4:3 metric modulation) must be found. CI: --segments --hard
+build-core/kt_tempo_bench --segments [--hard] [--seed N]
 ```
 
 Other options:
@@ -68,6 +71,10 @@ Ask the owner for the folder path on their machine.
   - Interface: `push()` blocks, then call `finish()` once.
   - Beat grid uses a kick-led phase lock and a multi-cue downbeat.
   - Grids are 4/4 unless the track is confidently in 3.
+  - Segments (#4): `tempoSegments` (dynamic grid: jumps, ramps as markers every `rampMarkerBars`, each with its
+    own meter and felt pulse), `keySegments`, `bpmMin`/`bpmMax`. A steady track gets exactly today's single
+    result; a change needs `minSegmentBars` (16) of readings and onset confirmation. Readings fold half/double
+    and 3:2 / 4:3 into the track's family, so those never split a track. `-DKT_SEG_DEBUG` prints the decisions.
 - `KeyDetector`, `MusicTheory`: key, Camelot and Open Key.
 - `Fft`: real FFT done as a half-size complex transform.
 
