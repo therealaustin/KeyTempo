@@ -172,7 +172,13 @@ over time (a `[174]` in the file name scores it).
 - Builds are unsigned. On macOS, Gatekeeper may block them until you run
   `xattr -dr com.apple.quarantine <plugin>` or sign/notarize them.
 
-## Licensing note
+## Licence
+
+KeyTempo is free software under the [GNU Affero General Public License, version 3](LICENSE), the same licence
+it uses JUCE under and the same as TrueGrid, which builds on its analysis core. That covers the plug-in and
+`src/core`. As the copyright holder, the owner can still offer the core under other terms later.
+
+### Licensing note
 
 JUCE 8 and later is dual-licensed under AGPLv3 or a commercial JUCE licence (there is a free tier
 for small developers). If you distribute closed-source builds you need the commercial licence.
