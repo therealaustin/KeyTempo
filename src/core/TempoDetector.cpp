@@ -523,6 +523,87 @@ TempoResult TempoDetector::analyse (double minBpm, double maxBpm, Genre genre) c
             winner = c;
             break;
         }
+    // Dotted-rhythm (4:3) guard. Dotted-8th and dotted-quarter patterns (3 + 3 + 3 + 3 + 4
+    // sixteenths, common in dubstep, glitch-hop and halftime) form a pulse at 4/3 (or 2/3)
+    // of the true tempo that can fit a backbeat template better than the true tempo's
+    // irregular bar. The pattern restarts every bar of the true tempo, though, so the kick
+    // and bass repeat every 4 and 8 true beats, not every 3 and 6 (the dotted reading's
+    // 4 and 8 beats). When the winner is such a 4:3 reading of another candidate and the
+    // low band clearly repeats at that candidate's bar while the drums play, the candidate's
+    // tempo family wins. Only this direction:
+    // the winner's beats lie on the candidate's 16th grid. In the reverse case they would
+    // lie on a triplet grid, where swung music could be pulled to the wrong reading. A
+    // track that really changes to the 4:3 tempo (a metric modulation) repeats at the
+    // dotted bar in its new section and keeps its reading there.
+    const Candidate* displaced = nullptr; // the dotted reading the guard overruled
+    double guardMargin = 0.0;
+    double kickMean = 0.0;
+    for (int i = std::max (0, n - (int) (4.0 * envRate)); i < n; ++i) // the most recent 4 s
+        kickMean += el[(size_t) i];
+    kickMean /= std::min (n, (int) (4.0 * envRate));
+    const double drumPresence = kickPeak > 1.0e-9 ? std::clamp (kickMean / (0.5 * kickPeak), 0.0, 1.0) : 0.0;
+
+    // Needs the drums playing: the test reads the bar from the kick and bass.
+    if (winner != nullptr && drumPresence >= 0.5)
+    {
+        auto octaveRatio = [] (double r)
+        {
+            while (r >= 2.0) r *= 0.5;
+            while (r < 1.0) r *= 2.0;
+            return r;
+        };
+        const Candidate* other = nullptr;
+        for (auto* c : ranked)
+            if (c != winner && foldIntoRange (c->bpm) > 0.0 && c->total >= 0.25 * winner->total
+                && std::abs (octaveRatio (winner->bpm / c->bpm) - 4.0 / 3.0) < 0.012)
+            {
+                other = c;
+                break;
+            }
+        if (other != nullptr)
+        {
+            double bpm = other->bpm; // the candidate's family, at a beat rate where bars are a few seconds
+            while (bpm < 100.0) bpm *= 2.0;
+            while (bpm >= 200.0) bpm *= 0.5;
+            const double beat = 60.0 * envRate / bpm;
+            const int lagMax = (int) std::ceil (beat * 8.0) + 4;
+            if (lagMax < n / 2)
+            {
+                const auto acfLow = autocorrelation (conditionEnvelope (el, envRate), lagMax);
+                if (! acfLow.empty())
+                {
+                    const double trueBars = 0.5 * (peakNear (acfLow, 4.0 * beat) + peakNear (acfLow, 8.0 * beat));
+                    const double dottedBars = 0.5 * (peakNear (acfLow, 3.0 * beat) + peakNear (acfLow, 6.0 * beat));
+#ifdef KT_TEMPO_DEBUG
+                    std::fprintf (stderr, "    dotted guard: %.2f vs winner %.2f  bars %.2f / %.2f\n", other->bpm, winner->bpm, trueBars, dottedBars);
+#endif
+                    if (trueBars >= 0.12 && trueBars >= 1.6 * dottedBars + 0.04)
+                    {
+                        // That family at the octave whose 4-beat bars were just confirmed, if it
+                        // can be shown; otherwise its best-scoring reading that can.
+                        const Candidate* family = nullptr;
+                        for (auto* c : ranked)
+                            if (const double r = octaveRatio (c->bpm / other->bpm); foldIntoRange (c->bpm) > 0.0 && (r < 1.012 || r > 1.976))
+                            {
+                                family = c;
+                                break;
+                            }
+                        if (family != nullptr)
+                        {
+                            displaced = winner;
+                            guardMargin = 1.0 - dottedBars / trueBars;
+                            winner = family;
+                            const double octave = std::exp2 (std::round (std::log2 (bpm / winner->bpm)));
+                            const double atBars = winner->bpm * octave;
+                            shownBpm = (octave >= 0.25 && octave <= 4.0 && atBars >= minBpm - 0.5 && atBars <= maxBpm + 0.5)
+                                         ? atBars : foldIntoRange (winner->bpm);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (auto* c : ranked)
     {
         const double f = foldIntoRange (c->bpm);
@@ -581,17 +662,18 @@ TempoResult TempoDetector::analyse (double minBpm, double maxBpm, Genre genre) c
         var += (s - avg) * (s - avg);
     const double sd = std::sqrt (var / (double) scores.size()) + 1.0e-9;
     const double z = (periodicity (bestBpm / octave) * weakPrior (bestBpm / octave) - avg) / sd;
-    const double margin = rival != nullptr ? 1.0 - rival->total / winner->total : 1.0;
+    // An overruled dotted reading scores higher by construction; the bar test is the margin.
+    const double winnerTotal = displaced != nullptr ? std::max (winner->total, displaced->total) : winner->total;
+    const double margin = rival == nullptr ? 1.0
+                        : (displaced != nullptr && std::abs (std::remainder (std::log2 (rival->bpm / displaced->bpm), 1.0)) < 0.02
+                               ? guardMargin : 1.0 - rival->total / winnerTotal);
 
-    double kickMean = 0.0;
-    for (int i = std::max (0, n - (int) (4.0 * envRate)); i < n; ++i) // the most recent 4 s
-        kickMean += el[(size_t) i];
-    kickMean /= std::min (n, (int) (4.0 * envRate));
-    result.drumPresence = kickPeak > 1.0e-9 ? (float) std::clamp (kickMean / (0.5 * kickPeak), 0.0, 1.0) : 0.0f;
+    result.drumPresence = (float) drumPresence;
 
     result.bpm = bestBpm;
     result.feel = winner->groove.feel;
-    result.grooveFit = (float) winner->groove.plausibility;
+    // The dotted reading's groove fit is the same pattern heard on the true grid.
+    result.grooveFit = (float) std::max (winner->groove.plausibility, displaced != nullptr ? displaced->groove.plausibility : 0.0);
     result.alternateBpm = rival != nullptr ? foldIntoRange (rival->bpm) : 0.0;
     result.confidence = (float) (std::clamp ((z - 1.0) / 3.0, 0.0, 1.0)
                                  * std::clamp (winner->periodicity / 0.25, 0.0, 1.0)

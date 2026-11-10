@@ -252,6 +252,27 @@ void AnalysisEngine::updateTempoMemory (const TempoResult& raw)
             shown = &h;
     }
 
+    // Dotted family: a reading at 4/3 (or 2/3) of another tempo is that tempo's dotted-8th
+    // (or dotted-quarter) pulse, and every one of its beats lies on the other's 16th grid.
+    // Tracks that spend a section in such a polyrhythm (dubstep, glitch-hop) keep their
+    // grid in the producer's tempo, so the slower family keeps the display once it holds a
+    // good share of the evidence. Not the reverse (2:3 of a reading lies on a triplet grid).
+    {
+        auto octaveRatio = [] (double r)
+        {
+            while (r >= 2.0) r *= 0.5;
+            while (r < 1.0) r *= 2.0;
+            return r;
+        };
+        const Hypothesis* base = nullptr;
+        for (auto& h : hypotheses)
+            if (std::abs (octaveRatio (shown->bpm / h.bpm) - 4.0 / 3.0) < 0.012 && h.weight > 0.5 * shown->weight
+                && (base == nullptr || h.weight > base->weight))
+                base = &h;
+        if (base != nullptr)
+            shown = base;
+    }
+
     // Strongest other reading that isn't just the same tempo.
     const Hypothesis* alternate = nullptr;
     for (auto& h : hypotheses)

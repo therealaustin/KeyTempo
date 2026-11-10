@@ -51,7 +51,7 @@ Genre presetFor (Style s)
             return Genre::Trance;
         case Style::DnbTwoStep: case Style::DnbAmen: case Style::Neurofunk: case Style::Liquid: case Style::DnbHalftime: case Style::DnbRolling:
             return Genre::DrumAndBass;
-        case Style::Dubstep: case Style::Trap:
+        case Style::Dubstep: case Style::DubstepDotted: case Style::Trap:
             return Genre::DubstepTrap;
         case Style::BoomBap:
             return Genre::HipHop;

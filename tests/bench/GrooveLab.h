@@ -21,7 +21,8 @@ enum class Style
 {
     House, TechHouse, Trance, ProgDotted, Techno,
     DnbTwoStep, DnbAmen, Neurofunk, Liquid, DnbHalftime, DnbRolling,
-    Dubstep, Trap, BoomBap, UKGarage, PopRock
+    Dubstep, Trap, BoomBap, UKGarage, PopRock,
+    DubstepDotted // added later; kept last so the other styles keep their seeds
 };
 
 inline const char* styleName (Style s)
@@ -40,6 +41,7 @@ inline const char* styleName (Style s)
         case Style::DnbHalftime: return "DnB halftime";
         case Style::DnbRolling:  return "DnB rolling 3:2";
         case Style::Dubstep:     return "Dubstep";
+        case Style::DubstepDotted: return "Dubstep (dotted 4:3)";
         case Style::Trap:        return "Trap";
         case Style::BoomBap:     return "Boom bap";
         case Style::UKGarage:    return "UK garage";
@@ -276,7 +278,7 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
     std::string kickP, snareP, clapP, hatP, ohatP, shakerP, percP, bassP;
     int patternBars = 1;
     bool fourOnFloorDucking = false, rollingBass = false, reese = false, use808 = false, dotted = false, amenFill = false;
-    bool wobble = false, neuroStabs = false, arpInMain = false, dottedRiff = false;
+    bool wobble = false, neuroStabs = false, arpInMain = false, dottedRiff = false, dottedBass = false;
 
     switch (style)
     {
@@ -344,6 +346,14 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
         case Style::Dubstep:
             kickP = "X.........X.....";  snareP = "........X.......";
             hatP = "x.x.x.x.x.x.x.x."; ohatP = "......x.......x."; wobble = true;
+            break;
+        case Style::DubstepDotted:
+            // Modelled on Reso "Axion (KOAN Sound Remix)": hats on the beats, while kick, snare
+            // and an 808 alternate on dotted 8ths (every 3 sixteenths, restarting each bar).
+            // The dotted hits form a pulse at 4/3 of the tempo (or 2/3) that fits a backbeat
+            // better than the true tempo does.
+            kickP = "X.....X.....X...";  snareP = "...X.....X.....X";
+            hatP = "x...x...x...x..."; dottedBass = true;
             break;
         case Style::Trap:
             kickP = "X......X..X.....X.....X...X.....";  clapP = "........X...............X.......";
@@ -450,6 +460,9 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
                     m.add (s0 + n, (float) (0.35 * lfo * std::tanh (3.0 * (2 * ph - 1))));
                 }
             }
+            if (dottedBass)
+                for (int s : { 0, 6, 12 })
+                    d.sub808 (t0 + s * step, 0.9f, midiToHz (chord), step * 2.6);
             if (neuroStabs)
                 for (int s : { 2, 5, 7, 11, 13 })
                     m.saw (t0 + s * step, step * 0.8, midiToHz (chord + 7), 1.3f, 0.001, 2500.0, 0.01);
@@ -549,6 +562,7 @@ inline std::vector<Case> benchmarkCases()
     add (Style::DnbHalftime, { 170, 174 });
     add (Style::DnbRolling,  { 172, 174, 175 });
     add (Style::Dubstep,     { 138, 140, 142, 150 });
+    add (Style::DubstepDotted, { 135, 138, 140, 145 });
     add (Style::Trap,        { 130, 140, 145, 150 });
     add (Style::BoomBap,     { 85, 88, 90, 93, 96 });
     add (Style::UKGarage,    { 130, 132, 134, 136 });
