@@ -233,7 +233,10 @@ static void testTrackAnalyzer()
     std::printf ("Whole-track analysis (beat grid)\n");
     using groove::Style;
     const std::pair<Style, double> clips[] = { { Style::DnbTwoStep, 174.0 }, { Style::House, 124.0 }, { Style::Trance, 138.0 },
-                                               { Style::Dubstep, 140.0 }, { Style::BoomBap, 90.0 } };
+                                               { Style::Dubstep, 140.0 }, { Style::BoomBap, 90.0 },
+                                               // Broken beats whose kicks sit mostly on off-beat 8ths
+                                               // (the grid used to land half a beat late on these).
+                                               { Style::DnbHalftime, 170.0 }, { Style::DnbAmen, 170.0 }, { Style::Neurofunk, 172.0 } };
     for (const auto& [style, bpm] : clips)
     {
         const auto clip = groove::make (style, bpm, 7);

@@ -40,7 +40,7 @@ jobs:
             pluginval: pluginval_Linux.zip
             generator: Ninja
           - name: macOS
-            os: macos-14
+            os: macos-15
             pluginval: pluginval_macOS.zip
             generator: Ninja
           - name: Windows
@@ -87,7 +87,7 @@ jobs:
       - name: Download pluginval
         shell: bash
         run: |
-          curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v1.0.4/${{ matrix.pluginval }}"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v1.0.4/${{ matrix.pluginval }}"
           unzip -o pluginval.zip -d pluginval
 
       - name: Validate VST3 (pluginval)
