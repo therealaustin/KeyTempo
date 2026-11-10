@@ -13,6 +13,10 @@
 //   kt_tempo_bench --min N         Exit with an error if fewer than N clips are correct (CI)
 //   kt_tempo_bench --seed N        Different random variations of every clip
 //   kt_tempo_bench --hard          Add delays, reverb, triplet percussion, rolls, dropped kicks
+//   kt_tempo_bench --segments      Whole-track analyser: every steady clip must give one tempo and
+//                                  one key segment, and the tempo / key change clips must be found
+//                                  (start within 1 bar, BPM within 0.05, grid within 20 ms).
+//                                  Exits with an error on any failure (CI).
 //
 // For each clip the engine runs like the plug-in does (0.4 s updates). Reported:
 //   final   – tempo shown at the end of the clip
@@ -185,6 +189,219 @@ int runAll (Genre forcedGenre, bool usePreset, const char* filter, const char* w
         std::printf ("  %s %d/%d", name.c_str(), s.first, s.second);
     std::printf ("\nTOTAL: %d/%zu correct at end, mean stability %.0f%%\n", ok, results.size(), 100.0 * stableSum / (double) results.size());
     return ok;
+}
+
+/** Where the analysed grid puts the beat nearest `t`: (time, beat of the bar). */
+std::pair<double, int> nearestGridBeat (const TrackAnalysis& a, double t)
+{
+    size_t s = 0;
+    while (s + 1 < a.tempoSegments.size() && a.tempoSegments[s + 1].startSeconds <= t)
+        ++s;
+    // Near a marker, the beat may belong to the previous segment's grid.
+    double bestTime = 1.0e9;
+    int bestBeat = 0;
+    for (size_t k = (s > 0 ? s - 1 : 0); k <= std::min (s + 1, a.tempoSegments.size() - 1); ++k)
+    {
+        const auto& g = a.tempoSegments[k];
+        const double end = k + 1 < a.tempoSegments.size() ? a.tempoSegments[k + 1].startSeconds : 1.0e9;
+        const double period = 60.0 / g.bpm;
+        const double n = std::max (0.0, std::round ((t - g.startSeconds) / period));
+        const double bt = g.startSeconds + n * period;
+        if (bt > end + 1.0e-6 || (k > 0 && bt < g.startSeconds - 1.0e-6))
+            continue;
+        if (std::abs (bt - t) < std::abs (bestTime - t))
+        {
+            bestTime = bt;
+            const int bpb = g.numerator == 3 && g.denominator == 4 ? 3 : 4;
+            bestBeat = (int) (((g.beatInBar - 1 + (long long) n) % bpb + bpb) % bpb) + 1;
+        }
+    }
+    return { bestTime, bestBeat };
+}
+
+int runSegments()
+{
+    int failures = 0;
+
+    // 1. No steady clip may split.
+    auto cases = groove::benchmarkCases();
+    std::vector<std::string> splits (cases.size());
+    std::atomic<size_t> next { 0 };
+    std::vector<std::thread> pool;
+    for (unsigned w = 0; w < std::max (1u, std::thread::hardware_concurrency()); ++w)
+        pool.emplace_back ([&]
+        {
+            for (size_t i; (i = next++) < cases.size();)
+            {
+                const auto& c = cases[i];
+                const auto clip = groove::make (c.style, c.bpm, (unsigned) (c.bpm * 10) + (unsigned) c.style * 1000 + seedOffset * 7919u, 44100.0, hardMode);
+                const auto a = analyseTrack (clip.audio.data(), clip.audio.size(), clip.sampleRate);
+                if (a.tempoSegments.size() != 1 || a.keySegments.size() != 1 || a.variableTempo || a.bpmMin != a.bpm || a.bpmMax != a.bpm)
+                    splits[i] = std::to_string (a.tempoSegments.size()) + " tempo / " + std::to_string (a.keySegments.size()) + " key segments";
+            }
+        });
+    for (auto& t : pool)
+        t.join();
+    int steadyOk = 0;
+    for (size_t i = 0; i < cases.size(); ++i)
+        if (splits[i].empty())
+            ++steadyOk;
+        else
+        {
+            ++failures;
+            std::printf ("FALSE SPLIT: %s %.0f: %s\n", groove::styleName (cases[i].style), cases[i].bpm, splits[i].c_str());
+        }
+    std::printf ("\n=== Segments%s ===\nSteady clips with one tempo and one key segment: %d/%zu\n", hardMode ? " (hard)" : "", steadyOk,
+                 cases.size());
+
+    // 2. Clips that change.
+    const auto vcases = groove::variableCases (101 + seedOffset * 7919u, hardMode);
+    std::vector<TrackAnalysis> results (vcases.size());
+    next = 0;
+    pool.clear();
+    for (unsigned w = 0; w < std::max (1u, std::thread::hardware_concurrency()); ++w)
+        pool.emplace_back ([&]
+        {
+            for (size_t i; (i = next++) < vcases.size();)
+                results[i] = analyseTrack (vcases[i].clip.audio.data(), vcases[i].clip.audio.size(), vcases[i].clip.sampleRate);
+        });
+    for (auto& t : pool)
+        t.join();
+
+    for (size_t i = 0; i < vcases.size(); ++i)
+    {
+        const auto& c = vcases[i];
+        const auto& a = results[i];
+        std::vector<std::string> problems;
+        std::printf ("\n%s: %.3f BPM (range %.3f-%.3f), %zu tempo segments, key %s, %zu key segments\n", c.name.c_str(), a.bpm, a.bpmMin,
+                     a.bpmMax, a.tempoSegments.size(), a.key >= 0 ? theory::camelot (a.key).c_str() : "-", a.keySegments.size());
+        for (auto& g : a.tempoSegments)
+            std::printf ("   tempo %8.3f s %8.3f BPM  beat %d  %d/%d%s  conf %.2f%s\n", g.startSeconds, g.bpm, g.beatInBar, g.numerator, g.denominator,
+                         g.pulseBpm > 0 ? (" pulse " + std::to_string (g.pulseBpm).substr (0, 6)).c_str() : "", g.confidence, g.ramp ? "  ramp" : "");
+        for (auto& k : a.keySegments)
+            std::printf ("   key   %8.3f s  %s  conf %.2f\n", k.startSeconds, theory::camelot (k.key).c_str(), k.confidence);
+
+        // Meter sections: a segment on each change's downbeat, with the right signature.
+        // Tempo checks below then see the sections between tempo changes only.
+        std::vector<TempoSegment> tempoOnly;
+        for (size_t g = 0; g < a.tempoSegments.size(); ++g)
+            if (g == 0 || a.tempoSegments[g].bpm != a.tempoSegments[g - 1].bpm || a.tempoSegments[g].ramp)
+                tempoOnly.push_back (a.tempoSegments[g]);
+        if (! c.meters.empty())
+        {
+            std::vector<TempoSegment> changes;
+            for (size_t g = 0; g < a.tempoSegments.size(); ++g)
+            {
+                const auto& s = a.tempoSegments[g];
+                if (g == 0 || s.numerator != a.tempoSegments[g - 1].numerator || s.denominator != a.tempoSegments[g - 1].denominator
+                    || s.pulseBpm != a.tempoSegments[g - 1].pulseBpm)
+                    changes.push_back (s);
+            }
+            if (changes.size() != c.meters.size())
+                problems.push_back (std::to_string (changes.size()) + " meter sections, want " + std::to_string (c.meters.size()));
+            else
+                for (size_t m = 0; m < changes.size(); ++m)
+                {
+                    const auto& want = c.meters[m];
+                    const double bar = want.numerator * 60.0 / changes[m].bpm;
+                    const double wantPulse = want.pulse != 1.0 ? changes[m].bpm * want.pulse : 0.0;
+                    if (changes[m].numerator != want.numerator || changes[m].denominator != want.denominator
+                        || std::abs (changes[m].pulseBpm - wantPulse) > 0.1)
+                        problems.push_back ("meter section " + std::to_string (m + 1) + " is " + std::to_string (changes[m].numerator) + "/"
+                                            + std::to_string (changes[m].denominator) + " pulse " + std::to_string (changes[m].pulseBpm));
+                    if (m > 0 && std::abs (changes[m].startSeconds - want.start) > 0.02)
+                        problems.push_back ("meter section " + std::to_string (m + 1) + " starts at " + std::to_string (changes[m].startSeconds)
+                                            + ", want " + std::to_string (want.start));
+                    (void) bar;
+                }
+        }
+
+        // Steady sections: one non-ramp segment each, starting within a bar, BPM within
+        // 0.05, the grid on the true beats in the middle of the section, beat 1 right.
+        std::vector<TempoSegment> steady;
+        for (auto& g : tempoOnly)
+            if (! g.ramp)
+                steady.push_back (g);
+        if (steady.size() != c.tempo.size())
+            problems.push_back (std::to_string (steady.size()) + " steady segments, want " + std::to_string (c.tempo.size()));
+        else
+            for (size_t s = 0; s < steady.size(); ++s)
+            {
+                const double want = c.tempo[s].second, start = c.tempo[s].first;
+                const double bar = 4 * 60.0 / want;
+                if (std::abs (steady[s].bpm - want) > 0.05)
+                    problems.push_back ("section " + std::to_string (s + 1) + " BPM " + std::to_string (steady[s].bpm));
+                if (s > 0 && std::abs (steady[s].startSeconds - start) > bar)
+                    problems.push_back ("section " + std::to_string (s + 1) + " starts at " + std::to_string (steady[s].startSeconds));
+                const double end = s + 1 < c.tempo.size() ? c.tempo[s + 1].first : (double) c.clip.audio.size() / c.clip.sampleRate;
+                const double from = s > 0 && c.rampTo > 0 ? c.rampTo : start;
+                const double sectionEnd = s == 0 && c.rampFrom > 0 ? c.rampFrom : end;
+                const double mid = from + std::floor (0.5 * (sectionEnd - from) / bar) * bar; // a true downbeat
+                const auto [beat, beatInBar] = nearestGridBeat (a, mid);
+                if (std::abs (beat - mid) > 0.02)
+                    problems.push_back ("section " + std::to_string (s + 1) + " grid off by " + std::to_string ((int) std::lround (1000 * (beat - mid))) + " ms");
+                else if (beatInBar != 1)
+                    problems.push_back ("section " + std::to_string (s + 1) + " downbeat on beat " + std::to_string (beatInBar));
+            }
+
+        // Ramps: the grid follows every true beat of the glide.
+        if (c.rampFrom > 0 && c.bpmAt)
+        {
+            double worst = 0.0;
+            for (double b = 128.0; b <= 256.0; b += 1.0)
+            {
+                const double t = groove::beatTime (c.bpmAt, b);
+                worst = std::max (worst, std::abs (nearestGridBeat (a, t).first - t));
+            }
+            std::printf ("   ramp: worst beat %.1f ms off\n", worst * 1000.0);
+            if (worst > 0.02)
+                problems.push_back ("ramp grid off by " + std::to_string ((int) std::lround (worst * 1000)) + " ms");
+        }
+
+        // Keys.
+        if (! c.checkKey)
+            ;
+        else if (a.keySegments.size() != c.keyChanges.size() + 1)
+            problems.push_back (std::to_string (a.keySegments.size()) + " key segments, want " + std::to_string (c.keyChanges.size() + 1));
+        else
+            for (size_t k = 0; k < c.keyChanges.size(); ++k)
+            {
+                const auto& before = a.keySegments[k];
+                const auto& after = a.keySegments[k + 1];
+                const double bar = 4 * 60.0 / c.tempo.front().second;
+                if (std::abs (after.startSeconds - c.keyChanges[k].first) > bar)
+                    problems.push_back ("key change at " + std::to_string (after.startSeconds) + " s, want " + std::to_string (c.keyChanges[k].first));
+                // Synthetic harmony (a minor loop of four chords) leaves the relative, parallel
+                // and fifth-related keys close, so either side may read as one of those; the
+                // move itself must be the right number of semitones.
+                auto family = [] (int key)
+                {
+                    std::vector<int> f;
+                    for (int fifth : { 0, 7, 5 })
+                    {
+                        const int t = (key % 12 + fifth) % 12;
+                        const bool minor = key >= 12;
+                        f.push_back (t + (minor ? 12 : 0));
+                        f.push_back (minor ? (t + 3) % 12 : (t + 9) % 12 + 12); // relative
+                        f.push_back (minor ? t : t + 12);                       // parallel
+                    }
+                    return f;
+                };
+                bool moved = false;
+                for (int x : family (before.key))
+                    for (int y : family (after.key))
+                        moved = moved || ((x >= 12) == (y >= 12) && ((y - x) % 12 + 12) % 12 == ((c.keyChanges[k].second % 12) + 12) % 12);
+                if (! moved)
+                    problems.push_back ("key moves " + theory::camelot (before.key) + " -> " + theory::camelot (after.key));
+            }
+
+        for (auto& p : problems)
+            std::printf ("   FAIL: %s\n", p.c_str());
+        std::printf ("   %s\n", problems.empty() ? "ok" : "FAILED");
+        failures += problems.empty() ? 0 : 1;
+    }
+    std::printf ("\nSEGMENTS: %d failure%s\n", failures, failures == 1 ? "" : "s");
+    return failures;
 }
 } // namespace
 
@@ -452,6 +669,17 @@ int main (int argc, char** argv)
                     g = (Genre) std::atoi (argv[j + 1]);
             runFiles (argv[i + 1], g);
             return 0;
+        }
+
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp (argv[i], "--segments") == 0)
+        {
+            for (int j = 1; j < argc; ++j)
+            {
+                if (std::strcmp (argv[j], "--hard") == 0) hardMode = true;
+                else if (std::strcmp (argv[j], "--seed") == 0 && j + 1 < argc) seedOffset = (unsigned) std::atoi (argv[j + 1]);
+            }
+            return runSegments() == 0 ? 0 : 1;
         }
 
     bool preset = false;

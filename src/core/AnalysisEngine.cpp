@@ -21,6 +21,7 @@ void AnalysisEngine::reset()
     keyDetector.reset();
     tempo = {};
     lastRaw = {};
+    latest = {};
     hypotheses.clear();
     key = {};
     meter = {};
@@ -65,6 +66,7 @@ void AnalysisEngine::update()
 {
     // ---- Tempo: accumulate evidence for each distinct tempo hypothesis over the track.
     const auto raw = tempoDetector.analyse (minBpm, maxBpm, genre);
+    latest = raw;
     const double previousBpm = tempo.valid ? tempo.bpm : 0.0;
     updateTempoMemory (raw);
     if (tempo.valid && previousBpm > 0.0 && std::abs (tempo.bpm - previousBpm) / previousBpm > 0.03)

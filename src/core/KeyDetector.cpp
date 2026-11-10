@@ -166,17 +166,22 @@ void KeyDetector::processFrame()
     energyAcc += std::accumulate (frameChroma.begin(), frameChroma.end(), 0.0);
 }
 
-KeyResult KeyDetector::analyse() const
+KeyEvidence KeyDetector::evidence() const
 {
-    KeyResult r;
+    KeyEvidence e;
+    e.chroma = chromaAcc;
+    e.bass = bassAcc;
+    e.energy = energyAcc;
+    e.tuningCos = tuningCos;
+    e.tuningSin = tuningSin;
+    return e;
+}
+
+std::array<double, 24> KeyDetector::keyScores (const KeyEvidence& e)
+{
+    const auto& chromaAcc = e.chroma;
+    const auto& bassAcc = e.bass;
     const double total = std::accumulate (chromaAcc.begin(), chromaAcc.end(), 0.0);
-    if (total <= 1.0e-6 || energyAcc <= 1.0e-6)
-        return r;
-
-    const double peak = *std::max_element (chromaAcc.begin(), chromaAcc.end());
-    for (int i = 0; i < 12; ++i)
-        r.chroma[(size_t) i] = (float) (chromaAcc[(size_t) i] / peak);
-
     const double bassTotal = std::accumulate (bassAcc.begin(), bassAcc.end(), 0.0);
     const bool hasBass = bassTotal > 0.05 * total;
 
@@ -201,7 +206,22 @@ KeyResult KeyDetector::analyse() const
             scores[(size_t) key] += 0.6 * (tonicShare - 1.0 / 12.0);
         }
     }
+    return scores;
+}
 
+KeyResult KeyDetector::keyFor (const KeyEvidence& e)
+{
+    KeyResult r;
+    const auto& chromaAcc = e.chroma;
+    const double total = std::accumulate (chromaAcc.begin(), chromaAcc.end(), 0.0);
+    if (total <= 1.0e-6 || e.energy <= 1.0e-6)
+        return r;
+
+    const double peak = *std::max_element (chromaAcc.begin(), chromaAcc.end());
+    for (int i = 0; i < 12; ++i)
+        r.chroma[(size_t) i] = (float) (chromaAcc[(size_t) i] / peak);
+
+    const auto scores = keyScores (e);
     int best = 0;
     for (int k = 1; k < 24; ++k)
         if (scores[(size_t) k] > scores[(size_t) best])
@@ -215,7 +235,7 @@ KeyResult KeyDetector::analyse() const
     r.key = best;
     r.runnerUp = second;
     r.confidence = (float) (std::clamp (s1, 0.0, 1.0) * std::clamp ((s1 - s2) / 0.25, 0.0, 1.0));
-    r.tuningCents = (float) (100.0 * std::atan2 (tuningSin, tuningCos) / twoPi);
+    r.tuningCents = (float) (100.0 * std::atan2 (e.tuningSin, e.tuningCos) / twoPi);
     r.valid = true;
     return r;
 }

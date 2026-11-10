@@ -40,6 +40,8 @@ public:
     const TempoResult& getTempo() const noexcept { return tempo; }
     /** The latest single-window reading (what the detector hears right now). */
     const TempoResult& getRawTempo() const noexcept { return lastRaw; }
+    /** The reading from the last update(), valid or not (getRawTempo() keeps the last valid one). */
+    const TempoResult& getLatestReading() const noexcept { return latest; }
     const KeyResult& getKey() const noexcept { return key; }
     const MeterResult& getMeter() const noexcept { return meter; }
 
@@ -52,7 +54,7 @@ private:
     Genre genre = Genre::Auto;
     double signalSeconds = 0.0;
 
-    TempoResult tempo, lastRaw;
+    TempoResult tempo, lastRaw, latest;
 
     /** One tempo reading the track might have, with its accumulated evidence. */
     struct Hypothesis
