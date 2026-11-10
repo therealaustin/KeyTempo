@@ -150,6 +150,7 @@ build-core/kt_tempo_bench --wav out/      # write the clips to listen to
 | v0.2 (Auto) | 63 / 63 | 99% |
 | v0.2 (Auto, hard) | 63 / 63 | 98% |
 | v0.3 (Auto, hard, +3 rolling-DnB 3:2 clips) | 66 / 66 | 99% |
+| Analysis v5 (Auto, hard, +4 dotted-dubstep 4:3 clips) | 70 / 70 | 100% |
 
 Synthetic clips only prove the logic works; real tracks are the real test. On ten DnB and
 trance tracks that other analyzers get wrong (Beatport lists every DnB one at half tempo),

@@ -236,7 +236,9 @@ static void testTrackAnalyzer()
                                                { Style::Dubstep, 140.0 }, { Style::BoomBap, 90.0 },
                                                // Broken beats whose kicks sit mostly on off-beat 8ths
                                                // (the grid used to land half a beat late on these).
-                                               { Style::DnbHalftime, 170.0 }, { Style::DnbAmen, 170.0 }, { Style::Neurofunk, 172.0 } };
+                                               { Style::DnbHalftime, 170.0 }, { Style::DnbAmen, 170.0 }, { Style::Neurofunk, 172.0 },
+                                               // Dotted-8th kick and snare: used to read 4:3 or 2:3 of the tempo.
+                                               { Style::DubstepDotted, 140.0 } };
     for (const auto& [style, bpm] : clips)
     {
         const auto clip = groove::make (style, bpm, 7);
