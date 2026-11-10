@@ -9,7 +9,7 @@
 namespace kt
 {
 /** Bump whenever analysis results can change, so libraries know what to re-scan. */
-inline constexpr int analysisVersion = 5;
+inline constexpr int analysisVersion = 6;
 
 /** A section of constant tempo, starting on a beat. The segments together form the
     dynamic beat grid: each start is a grid marker (beat position + BPM), the shape

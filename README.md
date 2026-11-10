@@ -150,6 +150,7 @@ build-core/kt_tempo_bench --wav out/      # write the clips to listen to
 | v0.2 (Auto) | 63 / 63 | 99% |
 | v0.2 (Auto, hard) | 63 / 63 | 98% |
 | v0.3 (Auto, hard, +3 rolling-DnB 3:2 clips) | 66 / 66 | 99% |
+| Analysis v5 (Auto, hard, +4 dotted-dubstep 4:3 clips) | 70 / 70 | 100% |
 
 Synthetic clips only prove the logic works; real tracks are the real test. On ten DnB and
 trance tracks that other analyzers get wrong (Beatport lists every DnB one at half tempo),
@@ -172,7 +173,13 @@ over time (a `[174]` in the file name scores it).
 - Builds are unsigned. On macOS, Gatekeeper may block them until you run
   `xattr -dr com.apple.quarantine <plugin>` or sign/notarize them.
 
-## Licensing note
+## Licence
+
+KeyTempo is free software under the [GNU Affero General Public License, version 3](LICENSE), the same licence
+it uses JUCE under and the same as TrueGrid, which builds on its analysis core. That covers the plug-in and
+`src/core`. As the copyright holder, the owner can still offer the core under other terms later.
+
+### Licensing note
 
 JUCE 8 and later is dual-licensed under AGPLv3 or a commercial JUCE licence (there is a free tier
 for small developers). If you distribute closed-source builds you need the commercial licence.

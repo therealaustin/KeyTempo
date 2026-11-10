@@ -19,8 +19,8 @@ ctest --test-dir build --output-on-failure          # kt_core_tests
 cmake -S . -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DKT_BUILD_PLUGIN=OFF
 cmake --build build-core --parallel
 
-# Tempo benchmark: 66 synthetic genre tracks (tests/bench/GrooveLab.h). CI gate: --hard --min 64
-build-core/kt_tempo_bench --hard --min 64
+# Tempo benchmark: 70 synthetic genre tracks (tests/bench/GrooveLab.h). CI gate: --hard --min 68
+build-core/kt_tempo_bench --hard --min 68
 build-core/kt_tempo_bench --only "DnB" --genre 3     # filter by style name, force a genre preset
 # Segments (whole-track analyser): no steady clip may split, and the change clips (tempo jump, ramp,
 # DnB half-time section, key change, 3/4 section, 4:3 metric modulation) must be found. CI: --segments --hard
@@ -37,7 +37,7 @@ validates the plug-in with pluginval (pinned version) and, on macOS, auval. clap
 ## Rules for tempo changes
 
 1. Run `kt_tempo_bench` (normal and `--hard`) **before and after** any change to `TempoDetector`,
-   `GrooveModel`, `AnalysisEngine` or `TrackAnalyzer`. Both must stay at 66/66 (CI fails below 64).
+   `GrooveModel`, `AnalysisEngine` or `TrackAnalyzer`. Both must stay at 70/70 (CI fails below 68).
 2. Re-check the real tracks too (see below). The current result is 10/10 within 0.02 BPM, and a change that
    wins on synthetic tracks has broken real ones before.
 3. Keep the result stable. Changes to `updateIntervalSeconds` (1.2 s) have shifted downbeats before (2.0 was
@@ -48,6 +48,11 @@ validates the plug-in with pluginval (pinned version) and, on macOS, auval. clap
 Approaches already tried and reverted (don't retry them without a new idea):
 - A symmetric 2× check broke hard boom bap. The hat-based one-sided check on the kick-corrected grid stays.
 - Triplet-grid alignment caused 2:3 errors. 9/8 is handled by the kick-structure gate instead.
+
+Dotted rhythms (4:3 / 2:3 readings, e.g. Reso "Axion"): `TempoDetector` overrules a winner that is 4/3 of
+another candidate when the kick band repeats at that candidate's 4 and 8 beats rather than its 3 and 6, and
+`AnalysisEngine` keeps the slower family on screen while it holds half the evidence. Only that direction: the
+reverse lies on a triplet grid, where swung music would be pulled the wrong way.
 
 ## Real-track checks
 

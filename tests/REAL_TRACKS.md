@@ -52,3 +52,12 @@ The true BPM was measured by folding each whole track's onset envelope at candid
 
 "Locks on" = first time the shown tempo is within ±0.25 BPM; after that it stays correct for
 89–100% of the track.
+
+## Extra tracks
+
+| Track | True BPM | Before (Auto, analysis v4) | After (Auto, v5) | Note |
+|---|---|---|---|---|
+| Reso – Axion (KOAN Sound Remix) | 140 | **186.67** (4:3) | 140.0 | Dotted-8th kick, snare and bass from ~25 s; from ~2:00 the bass loops every 3 beats (a 4:3 metric modulation). Dubstep / Trap preset: 140.0 before and after. |
+
+The 10 tracks above give the same whole-track tempo, grid, downbeat and key after the
+dotted-rhythm fix as before it.
