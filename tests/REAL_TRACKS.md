@@ -61,3 +61,7 @@ The true BPM was measured by folding each whole track's onset envelope at candid
 
 The 10 tracks above give the same whole-track tempo, grid, downbeat and key after the
 dotted-rhythm fix as before it.
+
+With tempo, key and meter sections (#4, analysis v6) each of the 10 tracks is still one section of
+each kind (no false split), and the plug-in engine and whole-track results are identical to v5. Axion
+keeps 140.0 and gains a 4:3 felt-pulse section (186.67) from 2:02, where its rhythm shifts.
