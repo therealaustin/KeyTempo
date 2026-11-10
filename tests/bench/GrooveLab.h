@@ -249,8 +249,10 @@ inline void applyReverb (std::vector<float>& x, double sr, float wet)
 
 /** Makes a ~40-bar arrangement: 8 intro (drums), 16 main, 8 breakdown (no drums), 8 drop.
     `hard` adds what real productions throw at a detector: dotted-eighth delays, reverb,
-    triplet percussion, dropped kicks and snare rolls in the build-up. */
-inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, bool hard = false)
+    triplet percussion, dropped kicks and snare rolls in the build-up. `bars` > 40 makes the
+    drop longer; `keyShift` semitones from bar `keyShiftBar` on modulates (a last chorus). */
+inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, bool hard = false,
+                  int bars = 40, int keyShiftBar = -1, int keyShift = 0)
 {
     Clip clip;
     clip.bpm = bpm;
@@ -258,7 +260,6 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
     clip.sampleRate = sr;
 
     const double beat = 60.0 / bpm, step = beat / 4.0, barSec = beat * 4.0;
-    const int bars = 40;
     clip.audio.assign ((size_t) ((bars * barSec + 1.0) * sr), 0.0f);
 
     std::vector<float> drums (clip.audio.size(), 0.0f), music (clip.audio.size(), 0.0f);
@@ -376,7 +377,7 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
         L.arp = breakdown || (arpInMain && ! intro);
 
         const double t0 = bar * barSec;
-        const int chord = key + prog[(bar / 2) % 4];
+        const int chord = key + prog[(bar / 2) % 4] + (keyShiftBar >= 0 && bar >= keyShiftBar ? keyShift : 0);
 
         if (L.kick && ! kickP.empty())
             playPattern (kickP, bar, patternBars, step, swing, [&] (double t, float v) {
@@ -524,6 +525,118 @@ inline Clip make (Style style, double bpm, unsigned seed, double sr = 44100.0, b
     for (auto& v : clip.audio)
         v = std::tanh (1.2f * v / peak) * 0.8f; // gentle "mastering" saturation
     return clip;
+}
+
+// -----------------------------------------------------------------------------
+// Tracks with tempo or key changes, for TrackAnalyzer's segment detection.
+
+/** Joins clips end to end, each cut to a whole number of bars. */
+inline Clip splice (const std::vector<std::pair<Clip, int>>& partsAndBars)
+{
+    Clip out = partsAndBars.front().first;
+    out.audio.clear();
+    for (auto& [clip, bars] : partsAndBars)
+    {
+        const auto n = std::min (clip.audio.size(), (size_t) std::llround (bars * 4 * 60.0 / clip.bpm * clip.sampleRate));
+        out.audio.insert (out.audio.end(), clip.audio.begin(), clip.audio.begin() + (long) n);
+    }
+    return out;
+}
+
+/** Time of beat `beat` when the tempo at each beat is bpmAt (beat), with beat 0 at t = 0. */
+inline double beatTime (const std::function<double (double)>& bpmAt, double beat)
+{
+    const double step = 1.0 / 64.0;
+    double t = 0.0, b = 0.0;
+    for (; b + step <= beat; b += step)
+        t += step * 60.0 / bpmAt (b + 0.5 * step);
+    return t + (beat - b) * 60.0 / bpmAt (b);
+}
+
+/** Plays a constant-tempo clip with a changing tempo (resampling, so the pitch follows). */
+inline Clip warp (const Clip& src, const std::function<double (double)>& bpmAt)
+{
+    Clip out = src;
+    out.audio.clear();
+    const double sr = src.sampleRate;
+    double beat = 0.0;
+    for (;;)
+    {
+        const double pos = beat * 60.0 / src.bpm * sr;
+        const auto i = (size_t) pos;
+        if (i + 1 >= src.audio.size())
+            break;
+        const double f = pos - (double) i;
+        out.audio.push_back ((float) (src.audio[i] * (1.0 - f) + src.audio[i + 1] * f));
+        beat += bpmAt (beat) / 60.0 / sr;
+    }
+    return out;
+}
+
+/** A track whose tempo or key changes, with the true segments. */
+struct VariableCase
+{
+    std::string name;
+    Clip clip;
+    std::vector<std::pair<double, double>> tempo; // (start seconds, BPM) of each steady section
+    double rampFrom = -1.0, rampTo = -1.0;          // seconds the tempo glides between, if it does
+    std::function<double (double)> bpmAt;           // true tempo at each beat (for ramp checks)
+    std::vector<std::pair<double, int>> keyChanges; // (seconds, semitones up) after the start
+    bool checkKey = true;                           // false where resampling moves the pitch
+};
+
+inline std::vector<VariableCase> variableCases (unsigned seed, bool hard, double sr = 44100.0)
+{
+    std::vector<VariableCase> cases;
+    {
+        // House jumps from 128 to 140 at bar 48.
+        VariableCase c;
+        c.name = "Jump 128 -> 140";
+        c.clip = splice ({ { make (Style::House, 128, seed, sr, hard, 48), 48 }, { make (Style::House, 140, seed, sr, hard, 48), 48 } });
+        c.tempo = { { 0.0, 128.0 }, { 48 * 4 * 60.0 / 128.0, 140.0 } };
+        cases.push_back (std::move (c));
+    }
+    {
+        // DnB two-step 170 -> 174 at bar 64: close tempos in the DnB family.
+        VariableCase c;
+        c.name = "DnB jump 170 -> 174";
+        c.clip = splice ({ { make (Style::DnbTwoStep, 170, seed + 1, sr, hard, 64), 64 }, { make (Style::DnbTwoStep, 174, seed + 1, sr, hard, 64), 64 } });
+        c.tempo = { { 0.0, 170.0 }, { 64 * 4 * 60.0 / 170.0, 174.0 } };
+        cases.push_back (std::move (c));
+    }
+    {
+        // Trance at 120 for 32 bars, gliding to 128 over the next 32, then 128.
+        VariableCase c;
+        c.name = "Ramp 120 -> 128";
+        c.bpmAt = [] (double b) { return b < 128.0 ? 120.0 : (b < 256.0 ? 120.0 + 8.0 * (b - 128.0) / 128.0 : 128.0); };
+        const auto src = make (Style::Trance, 120, seed + 2, sr, hard, 104);
+        c.clip = warp (src, c.bpmAt);
+        c.checkKey = false; // the glide raises the pitch by ~1.1 semitones
+        c.rampFrom = beatTime (c.bpmAt, 128.0);
+        c.rampTo = beatTime (c.bpmAt, 256.0);
+        c.tempo = { { 0.0, 120.0 }, { c.rampTo, 128.0 } };
+        cases.push_back (std::move (c));
+    }
+    {
+        // DnB with a 32-bar half-time section: the same grid, so it must not split.
+        VariableCase c;
+        c.name = "DnB half-time section";
+        c.clip = splice ({ { make (Style::DnbTwoStep, 174, seed + 3, sr, hard, 48), 48 },
+                           { make (Style::DnbHalftime, 174, seed + 3, sr, hard, 40), 32 },
+                           { make (Style::DnbTwoStep, 174, seed + 3, sr, hard, 48), 32 } });
+        c.tempo = { { 0.0, 174.0 } };
+        cases.push_back (std::move (c));
+    }
+    {
+        // House up a semitone for the last 24 bars.
+        VariableCase c;
+        c.name = "Key change +1";
+        c.clip = make (Style::House, 124, seed + 4, sr, hard, 80, 56, 1);
+        c.tempo = { { 0.0, 124.0 } };
+        c.keyChanges = { { 56 * 4 * 60.0 / 124.0, 1 } };
+        cases.push_back (std::move (c));
+    }
+    return cases;
 }
 
 /** Benchmark set: each style at its typical tempos. */

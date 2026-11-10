@@ -25,6 +25,29 @@ struct KeyResult
       3. The time-averaged chroma is correlated against 24 rotated key profiles.
       4. A separate bass chroma (40-200 Hz) adds weight to keys whose tonic the bass
          line keeps returning to, which helps separate relative major/minor pairs. */
+/** The detector's accumulated evidence. Without memory decay (setMemorySeconds (0)) every
+    field is a plain running sum, so the difference of two snapshots is the evidence of the
+    audio between them (TrackAnalyzer uses that to find key changes). */
+struct KeyEvidence
+{
+    std::array<double, 12> chroma {}, bass {};
+    double energy = 0.0, tuningCos = 0.0, tuningSin = 0.0;
+
+    KeyEvidence operator- (const KeyEvidence& o) const noexcept
+    {
+        KeyEvidence d;
+        for (size_t i = 0; i < 12; ++i)
+        {
+            d.chroma[i] = chroma[i] - o.chroma[i];
+            d.bass[i] = bass[i] - o.bass[i];
+        }
+        d.energy = energy - o.energy;
+        d.tuningCos = tuningCos - o.tuningCos;
+        d.tuningSin = tuningSin - o.tuningSin;
+        return d;
+    }
+};
+
 class KeyDetector
 {
 public:
@@ -36,7 +59,13 @@ public:
 
     void push (const float* mono, int numSamples);
 
-    KeyResult analyse() const;
+    KeyResult analyse() const { return keyFor (evidence()); }
+
+    KeyEvidence evidence() const;
+    /** The key the given evidence points to (what analyse() does with the detector's own). */
+    static KeyResult keyFor (const KeyEvidence& e);
+    /** Profile score of each of the 24 keys for the given evidence (higher = more likely). */
+    static std::array<double, 24> keyScores (const KeyEvidence& e);
 
 private:
     void processFrame();
